@@ -1,12 +1,22 @@
 import { screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from './App';
+import { mockApi } from './test/api';
 import { jsonResponse, mockFetch } from './test/fetch';
 import { renderWithAuth, signedIn, testProfile } from './test/render';
 
 vi.mock('./lib/supabase', async () => (await import('./test/supabaseMock')).supabaseModule);
 
 const currentPath = () => screen.getByTestId('current-path').textContent;
+
+/** A signed-in user with a profile and no conversations yet. */
+function signedInBackend() {
+  mockApi((call) => {
+    if (call.path === '/api/users/me') return jsonResponse(testProfile());
+    if (call.path === '/api/conversations') return jsonResponse({ conversations: [] });
+    return undefined;
+  });
+}
 
 describe('protected routes', () => {
   it('sends signed-out users to the login page', async () => {
@@ -29,13 +39,15 @@ describe('protected routes', () => {
     expect(screen.getByRole('heading', { name: 'Sign-in is unavailable' })).toBeInTheDocument();
   });
 
-  it('takes signed-in users with a profile from / to their profile', async () => {
-    mockFetch().mockResolvedValue(jsonResponse(testProfile()));
+  it('shows signed-in users with a profile their chats at /', async () => {
+    signedInBackend();
     renderWithAuth(<App />, { path: '/' });
 
-    expect(await screen.findByRole('heading', { name: 'Maya Reyes' })).toBeInTheDocument();
-    expect(currentPath()).toBe('/profile');
-    expect(within(screen.getByRole('banner')).getByRole('link', { name: 'Maya Reyes' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Chats' })).toBeInTheDocument();
+    expect(currentPath()).toBe('/');
+    const header = within(screen.getByRole('banner'));
+    expect(header.getByRole('link', { name: 'Maya Reyes' })).toHaveAttribute('href', '/profile');
+    expect(header.getByRole('link', { name: 'Chats' })).toHaveAttribute('href', '/');
   });
 
   it('sends signed-in users without a profile to onboarding', async () => {
@@ -61,11 +73,11 @@ describe('protected routes', () => {
 
 describe('signed-out pages', () => {
   it('redirects signed-in users away from the login page', async () => {
-    mockFetch().mockResolvedValue(jsonResponse(testProfile()));
+    signedInBackend();
     renderWithAuth(<App />, { path: '/login', auth: signedIn() });
 
-    expect(await screen.findByRole('heading', { name: 'Maya Reyes' })).toBeInTheDocument();
-    expect(currentPath()).toBe('/profile');
+    expect(await screen.findByRole('heading', { name: 'Chats' })).toBeInTheDocument();
+    expect(currentPath()).toBe('/');
   });
 
   it.each([

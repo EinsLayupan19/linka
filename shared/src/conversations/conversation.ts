@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { messageSchema } from '../messages/message.js';
 import { userSummarySchema } from '../profiles/profile.js';
 
 export const CONVERSATION_NAME_MAX_LENGTH = 100;
@@ -87,8 +88,11 @@ export const conversationSchema = z.object({
   /** Groups only; 1:1 conversations are shown by the other member's name. */
   name: z.string().nullable(),
   createdAt: z.iso.datetime({ offset: true }),
+  /** Last activity: a new message or a change to the conversation. Lists are sorted by it. */
   updatedAt: z.iso.datetime({ offset: true }),
   members: z.array(conversationMemberSchema),
+  /** The newest message, for list previews; null when there are none. */
+  lastMessage: messageSchema.nullable(),
 });
 
 export type Conversation = z.infer<typeof conversationSchema>;

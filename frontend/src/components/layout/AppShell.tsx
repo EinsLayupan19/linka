@@ -19,17 +19,20 @@ function HeaderActions() {
   }
   if (state.status !== 'signed_in') return null;
 
+  const navLinkClassName = ({ isActive }: { isActive: boolean }) =>
+    `${focusRing} text-sm font-medium ${isActive ? 'text-ink' : 'text-ink-muted hover:text-ink'}`;
+
   return (
-    <div className="flex items-center gap-4">
+    <div className="flex min-w-0 items-center gap-3 sm:gap-4">
       {profile && (
-        <NavLink
-          to="/profile"
-          className={({ isActive }) =>
-            `${focusRing} text-sm font-medium ${isActive ? 'text-ink' : 'text-ink-muted hover:text-ink'}`
-          }
-        >
-          {profile.displayName}
-        </NavLink>
+        <nav aria-label="Main" className="flex min-w-0 items-center gap-3 sm:gap-4">
+          <NavLink to="/" end className={navLinkClassName}>
+            Chats
+          </NavLink>
+          <NavLink to="/profile" className={(state) => `${navLinkClassName(state)} max-w-[6rem] truncate sm:max-w-[9rem]`}>
+            {profile.displayName}
+          </NavLink>
+        </nav>
       )}
       <SignOutButton />
     </div>
@@ -40,7 +43,7 @@ export function AppShell() {
   return (
     <div className="flex min-h-[100dvh] flex-col">
       <header className="border-b border-line">
-        <div className="mx-auto flex h-14 w-full max-w-2xl items-center justify-between gap-4 px-4 sm:px-6">
+        <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
           <Link to="/" className={`${focusRing} text-base font-semibold tracking-tight`}>
             Linka
           </Link>

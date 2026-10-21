@@ -31,11 +31,81 @@ export const authMock = {
   updateUser: vi.fn(),
 };
 
+type StatusCallback = (status: 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED') => void;
+type BroadcastHandler = (message: { payload: unknown }) => void;
+
+/** A fake Realtime channel that tests drive by hand. */
+export interface FakeChannel {
+  topic: string;
+  options: unknown;
+  removed: boolean;
+  /** The server accepted (or re-accepted) the join. */
+  join(): void;
+  /** The connection dropped or the join was refused. */
+  fail(status?: 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED'): void;
+  /** Deliver a broadcast event to the channel's listeners. */
+  emit(event: string, payload: unknown): void;
+}
+
+export const realtimeChannels: FakeChannel[] = [];
+
+function createFakeChannel(topic: string, options: unknown) {
+  const handlers: { event: string; handler: BroadcastHandler }[] = [];
+  let onStatus: StatusCallback | undefined;
+
+  const fake: FakeChannel = {
+    topic,
+    options,
+    removed: false,
+    join: () => onStatus?.('SUBSCRIBED'),
+    fail: (status = 'CHANNEL_ERROR') => onStatus?.(status),
+    emit: (event, payload) => {
+      for (const h of handlers) if (h.event === event) h.handler({ payload });
+    },
+  };
+
+  const channel = {
+    on: vi.fn((_type: string, filter: { event: string }, handler: BroadcastHandler) => {
+      handlers.push({ event: filter.event, handler });
+      return channel;
+    }),
+    subscribe: vi.fn((callback: StatusCallback) => {
+      onStatus = callback;
+      return channel;
+    }),
+    __fake: fake,
+  };
+  realtimeChannels.push(fake);
+  return channel;
+}
+
+export const realtimeMock = {
+  channel: vi.fn((topic: string, options: unknown) => createFakeChannel(topic, options)),
+  removeChannel: vi.fn(async (channel: { __fake: FakeChannel }) => {
+    channel.__fake.removed = true;
+    return 'ok';
+  }),
+  setAuth: vi.fn(async () => undefined),
+};
+
+/** The fake channel most recently opened for `topic`. */
+export function latestChannel(topic?: string): FakeChannel {
+  const matches = topic ? realtimeChannels.filter((c) => c.topic === topic) : realtimeChannels;
+  const channel = matches.at(-1);
+  if (!channel) throw new Error(`No realtime channel${topic ? ` for ${topic}` : ''} was opened`);
+  return channel;
+}
+
 export const supabaseState = { configured: true };
 
 export const supabaseModule = {
   get isSupabaseConfigured() {
     return supabaseState.configured;
   },
-  getSupabase: () => ({ auth: authMock }),
+  getSupabase: () => ({
+    auth: authMock,
+    channel: realtimeMock.channel,
+    removeChannel: realtimeMock.removeChannel,
+    realtime: { setAuth: realtimeMock.setAuth },
+  }),
 };

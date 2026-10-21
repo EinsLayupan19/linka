@@ -31,6 +31,37 @@ const SUPABASE_STUB = `
 
   grant usage on schema public, auth to anon, authenticated;
   alter default privileges in schema public grant all on tables to anon, authenticated;
+
+  -- Supabase Realtime (Broadcast from Database), reduced to what our migrations use.
+  -- realtime.send() stores the event in realtime.messages, from where Supabase delivers it.
+  -- To authorize a private channel join, Supabase reads realtime.messages as the joining user
+  -- with realtime.topic() returning the requested topic: RLS decides. Tests do the same.
+  create schema realtime;
+  create table realtime.messages (
+    id bigserial primary key,
+    topic text not null,
+    extension text not null,
+    event text,
+    payload jsonb,
+    private boolean default false,
+    inserted_at timestamptz not null default now()
+  );
+  alter table realtime.messages enable row level security;
+  grant usage on schema realtime to anon, authenticated;
+  grant select, insert on realtime.messages to anon, authenticated;
+  grant usage on all sequences in schema realtime to anon, authenticated;
+
+  create function realtime.topic() returns text language sql stable as $$
+    select nullif(current_setting('realtime.topic', true), '')
+  $$;
+
+  create function realtime.send(payload jsonb, event text, topic text, private boolean default true)
+  returns void language plpgsql as $$
+  begin
+    insert into realtime.messages (payload, event, topic, private, extension)
+    values (payload, event, topic, private, 'broadcast');
+  end;
+  $$;
 `;
 
 const migrationsFolder = fileURLToPath(new URL('../db/migrations', import.meta.url));
@@ -45,6 +76,13 @@ export interface TestDatabase {
   createUser(username?: string): Promise<string>;
   /** Runs queries as a Supabase role, the way the Data API / Realtime would for that request. */
   asRole<T>(role: 'anon' | 'authenticated', userId: string | null, run: (tx: Transaction) => Promise<T>): Promise<T>;
+  /**
+   * Simulates Supabase's private-channel join check: may this user read Broadcast messages
+   * on `topic`? (Realtime asks RLS on realtime.messages with realtime.topic() = topic.)
+   */
+  canJoinTopic(role: 'anon' | 'authenticated', userId: string | null, topic: string): Promise<boolean>;
+  /** Broadcast events stored for a topic (what Realtime would deliver), oldest first. */
+  broadcastsOn(topic: string): Promise<{ event: string; payload: unknown; private: boolean }[]>;
   close(): Promise<void>;
 }
 
@@ -59,6 +97,15 @@ export async function createTestDatabase(): Promise<TestDatabase> {
     const id = randomUUID();
     await client.query('insert into auth.users (id, email) values ($1, $2)', [id, email]);
     return id;
+  }
+
+  function asRole<T>(role: 'anon' | 'authenticated', userId: string | null, run: (tx: Transaction) => Promise<T>) {
+    return client.transaction(async (tx) => {
+      await tx.exec(`set local role ${role}`);
+      const claims = JSON.stringify(userId ? { sub: userId, role } : { role });
+      await tx.query(`select set_config('request.jwt.claims', $1, true)`, [claims]);
+      return run(tx);
+    });
   }
 
   let userCount = 0;
@@ -78,13 +125,31 @@ export async function createTestDatabase(): Promise<TestDatabase> {
       return id;
     },
 
-    asRole(role, userId, run) {
+    asRole,
+
+    canJoinTopic(role, userId, topic) {
+      // Like Supabase: insert a probe message, try to read it as the user, roll back.
       return client.transaction(async (tx) => {
+        await tx.query(
+          "insert into realtime.messages (topic, extension, event, payload, private) values ($1, 'broadcast', 'probe', '{}', true)",
+          [topic],
+        );
         await tx.exec(`set local role ${role}`);
         const claims = JSON.stringify(userId ? { sub: userId, role } : { role });
         await tx.query(`select set_config('request.jwt.claims', $1, true)`, [claims]);
-        return run(tx);
+        await tx.query(`select set_config('realtime.topic', $1, true)`, [topic]);
+        const { rows } = await tx.query("select 1 from realtime.messages where topic = $1 and event = 'probe'", [topic]);
+        await tx.rollback();
+        return rows.length > 0;
       });
+    },
+
+    async broadcastsOn(topic) {
+      const { rows } = await client.query<{ event: string; payload: unknown; private: boolean }>(
+        'select event, payload, private from realtime.messages where topic = $1 order by id',
+        [topic],
+      );
+      return rows;
     },
 
     close: () => client.close(),

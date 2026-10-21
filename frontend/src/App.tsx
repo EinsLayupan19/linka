@@ -1,9 +1,12 @@
-import { Navigate, Route, Routes } from 'react-router';
+import { Route, Routes } from 'react-router';
 import { RedirectIfSignedIn, RequireAuth, RequireProfile } from './components/auth/RouteGuards';
 import { AppShell } from './components/layout/AppShell';
 import { AuthLayout } from './components/layout/AuthLayout';
+import { Chat } from './pages/Chat';
+import { Chats, ChatsHome } from './pages/Chats';
 import { ForgotPassword } from './pages/ForgotPassword';
 import { Login } from './pages/Login';
+import { NewChat } from './pages/NewChat';
 import { NotFound } from './pages/NotFound';
 import { Onboarding } from './pages/Onboarding';
 import { Profile } from './pages/Profile';
@@ -32,8 +35,11 @@ export function App() {
         </Route>
         <Route element={<RequireProfile />}>
           <Route element={<AppShell />}>
-            {/* Conversations take over "/" in the messaging phase. */}
-            <Route index element={<Navigate to="/profile" replace />} />
+            <Route element={<Chats />}>
+              <Route index element={<ChatsHome />} />
+              <Route path="/conversations/new" element={<NewChat />} />
+              <Route path="/conversations/:conversationId" element={<Chat />} />
+            </Route>
             <Route path="/profile" element={<Profile />} />
           </Route>
         </Route>

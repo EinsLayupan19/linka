@@ -12,6 +12,7 @@ import { usersRouter } from './routes/users.js';
 import { createSupabaseTokenVerifier, type VerifyAccessToken } from './services/auth.js';
 import { createConversationStore, type ConversationStore } from './services/conversations.js';
 import { checkDatabase } from './services/health.js';
+import { createMessageStore, type MessageStore } from './services/messages.js';
 import { createProfileStore, type ProfileStore } from './services/profiles.js';
 
 export interface AppDependencies {
@@ -21,6 +22,7 @@ export interface AppDependencies {
   /** null when DATABASE_URL is not configured (also for conversations). */
   profiles: ProfileStore | null;
   conversations: ConversationStore | null;
+  messages: MessageStore | null;
 }
 
 function defaultDependencies(): AppDependencies {
@@ -29,6 +31,7 @@ function defaultDependencies(): AppDependencies {
     verifyAccessToken: env.SUPABASE_URL ? createSupabaseTokenVerifier(env.SUPABASE_URL) : null,
     profiles: db ? createProfileStore(db) : null,
     conversations: db ? createConversationStore(db) : null,
+    messages: db ? createMessageStore(db) : null,
   };
 }
 

@@ -58,14 +58,29 @@ describe('member schemas', () => {
 });
 
 describe('createMessageSchema', () => {
-  it('trims content and rejects blank or oversized messages', () => {
-    expect(createMessageSchema.parse({ content: '  hi  ' })).toEqual({ content: 'hi' });
-    expect(createMessageSchema.safeParse({ content: '   ' }).success).toBe(false);
-    expect(createMessageSchema.safeParse({ content: 'x'.repeat(4001) }).success).toBe(false);
+  const clientId = '9b2d4f6a-8c0e-4a1b-9d3f-5e7a9c1b3d5f';
+
+  it('keeps the content exactly as typed', () => {
+    expect(createMessageSchema.parse({ content: '  indented\nsecond line ', clientId })).toEqual({
+      content: '  indented\nsecond line ',
+      clientId,
+    });
+  });
+
+  it('rejects empty, whitespace-only and oversized messages', () => {
+    expect(createMessageSchema.safeParse({ content: '', clientId }).success).toBe(false);
+    expect(createMessageSchema.safeParse({ content: ' \n\t ', clientId }).success).toBe(false);
+    expect(createMessageSchema.safeParse({ content: 'x'.repeat(4001), clientId }).success).toBe(false);
+    expect(createMessageSchema.safeParse({ content: 'x'.repeat(4000), clientId }).success).toBe(true);
   });
 
   it('rejects a client-supplied sender', () => {
-    expect(createMessageSchema.safeParse({ content: 'hi', senderId: maya }).success).toBe(false);
+    expect(createMessageSchema.safeParse({ content: 'hi', clientId, senderId: maya }).success).toBe(false);
+  });
+
+  it('requires a UUID client id', () => {
+    expect(createMessageSchema.safeParse({ content: 'hi' }).success).toBe(false);
+    expect(createMessageSchema.safeParse({ content: 'hi', clientId: 'abc' }).success).toBe(false);
   });
 });
 

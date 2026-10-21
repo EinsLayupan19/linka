@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
 import {
   ErrorCode,
   GROUP_MAX_MEMBERS,
@@ -7,14 +7,16 @@ import {
   type ConversationMember,
   type CreateConversationInput,
   type MemberRole,
+  type Message,
   type UpdateConversationInput,
 } from '@linka/shared';
 import type { Database } from '../db/client.js';
 import { postgresErrorCode, UNIQUE_VIOLATION } from '../db/errors.js';
-import { conversationMembers, conversations, profiles, type ConversationRow } from '../db/schema/index.js';
+import { conversationMembers, conversations, messages, profiles, type ConversationRow } from '../db/schema/index.js';
 import { AppError } from '../utils/AppError.js';
 import { canAddMembers, canChangeRole, canEditGroup, removalDecision } from './conversationPermissions.js';
 import { requireMembership } from './membership.js';
+import { toMessage } from './messages.js';
 
 export const CONVERSATION_LIST_LIMIT = 50;
 
@@ -69,22 +71,43 @@ export function createConversationStore(db: Database): ConversationStore {
     return byConversation;
   }
 
-  function toConversation(row: ConversationRow, members: ConversationMember[]): Conversation {
-    return {
+  /** The newest message of each conversation: one indexed lookup per conversation (LATERAL). */
+  async function loadLastMessages(conversationIds: string[]): Promise<Map<string, Message>> {
+    if (conversationIds.length === 0) return new Map();
+    const latest = db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conversations.id))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(1)
+      .as('latest');
+    const rows = await db
+      .select()
+      .from(conversations)
+      .innerJoinLateral(latest, sql`true`)
+      .where(inArray(conversations.id, conversationIds));
+    return new Map(rows.map((row) => [row.latest.conversationId, toMessage(row.latest)]));
+  }
+
+  async function loadDetails(rows: ConversationRow[]): Promise<Conversation[]> {
+    const ids = rows.map((row) => row.id);
+    const [members, lastMessages] = await Promise.all([loadMembers(ids), loadLastMessages(ids)]);
+    return rows.map((row) => ({
       id: row.id,
       type: row.type,
       name: row.name,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
-      members,
-    };
+      members: members.get(row.id) ?? [],
+      lastMessage: lastMessages.get(row.id) ?? null,
+    }));
   }
 
   async function load(conversationId: string): Promise<Conversation> {
     const [row] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
     if (!row) throw new Error(`Conversation ${conversationId} disappeared`);
-    const members = await loadMembers([row.id]);
-    return toConversation(row, members.get(row.id) ?? []);
+    const [conversation] = await loadDetails([row]);
+    return conversation!;
   }
 
   /** Throws a 400 naming the field if any of the ids has no profile. */
@@ -197,8 +220,7 @@ export function createConversationStore(db: Database): ConversationStore {
         .orderBy(desc(conversations.updatedAt), desc(conversations.id))
         .limit(CONVERSATION_LIST_LIMIT);
 
-      const members = await loadMembers(rows.map((r) => r.conversation.id));
-      return rows.map(({ conversation }) => toConversation(conversation, members.get(conversation.id) ?? []));
+      return loadDetails(rows.map((r) => r.conversation));
     },
 
     async getForUser(userId, conversationId) {

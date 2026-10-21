@@ -4,8 +4,8 @@
 | ----- | -------------------------------------- | ----------- |
 | 1     | Foundation                             | Complete    |
 | 2     | Authentication & user foundation       | Complete    |
-| 3     | Database & conversation foundation     | In review   |
-| 4     | Realtime messaging                     | Not started |
+| 3     | Database & conversation foundation     | Complete    |
+| 4     | Realtime messaging                     | In review   |
 | 5     | Read, delivery, presence & typing      | Not started |
 | 6     | Media & file sharing                   | Not started |
 | 7     | Voice calls                            | Not started |
@@ -67,6 +67,40 @@ Not verifiable until a Supabase project exists:
 - RLS and the `private` helper on hosted Supabase (tested on PGlite only)
 - That the `private` schema stays unexposed in the project's API settings (default)
 
+## Phase 4: Realtime messaging
+
+Done:
+
+- Realtime architecture decided and documented: Supabase Broadcast from Database, one private
+  channel per conversation (`conversation:<id>`, event `message.created`), authorized by RLS on
+  `realtime.messages` through the membership helper ([ARCHITECTURE.md](ARCHITECTURE.md#messaging-and-realtime-phase-4))
+- Migrations `0003` (millisecond `created_at`, `client_id` + unique index) and `0004` (broadcast
+  trigger, topic helper, realtime policy)
+- API: `GET/POST /api/conversations/:id/messages` with cursor pagination and idempotent sends;
+  conversation list with latest-message preview, sorted by last activity
+- UI: conversation list, conversation view, message history with "Load earlier messages",
+  composer, pending/failed/retry states, live status notice, new chat by username search;
+  desktop split view and mobile single-pane layout
+- Client realtime: joins only the open conversation, leaves on navigation, dedupes by id, orders by
+  `(createdAt, id)`, refetches the newest page after every (re)join
+- Tests: message API (auth, membership, spoofing, limits, retries, pagination with tied timestamps,
+  cursor/limit validation), broadcast trigger and channel authorization on PGlite, realtime client
+  service, message reducer, chat pages (list, history, pagination, sending, failures, realtime,
+  duplicates, reconnect, new chat)
+
+Not in this phase (by design): typing, presence, read/delivery receipts, unread counts,
+attachments, calls, push notifications, editing/deleting messages, offline support, live updates for
+conversations that are not open.
+
+Not verifiable until a Supabase project exists:
+
+- Real WebSocket delivery: joining private channels, receiving `message.created`, reconnect
+  behavior of supabase-js against the real Realtime service
+- The trigger and `realtime.send()` on hosted Supabase, including its daily partitions (tested
+  against a stand-in `realtime` schema on PGlite)
+- Hosted enforcement of the `realtime.messages` policy with "private channels only" enabled
+- The chat UI in a real browser (it sits behind sign-in); it was exercised through component tests
+
 ### Supabase setup (dashboard)
 
 1. **Create the project** (hosted). Then copy:
@@ -86,6 +120,11 @@ Not verifiable until a Supabase project exists:
 6. **Apply the migrations:** `cd backend && npm run db:migrate`.
 7. **API exposed schemas.** *Project Settings > Data API > Exposed schemas*: leave the default
    (`public`, `graphql_public`). Do **not** add `private`: it holds the RLS helper function.
+8. **Realtime: private channels only.** *Realtime > Settings*: turn **off** "Allow public access"
+   so only private, RLS-authorized channels can be joined. Linka's channels are all private.
+9. **Check realtime delivery** after applying the migrations: open the same conversation in two
+   browsers signed in as two members; a message sent in one should appear in the other without a
+   reload. If it does not, check *Database > Logs* for `linka: broadcasting message ... failed`.
 
 Supabase's built-in email service is heavily rate limited and meant for testing; configure custom
 SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
@@ -114,6 +153,14 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
 | Deleted accounts | Their messages stay with `sender_id = null`; memberships are removed |
 | Message ordering | `(created_at, id)`, cursor-ready; soft delete via `deleted_at` |
 | Read/delivery markers | Columns exist on `conversation_members` (PLAN.md §5), logic in Phase 5 |
+| Realtime | Broadcast from Database, private channel per conversation, event `message.created`, payload = shared `Message` |
+| Realtime writes | Only the database trigger publishes; no INSERT policy for clients |
+| Removed members on an open channel | May keep receiving live events until their token refreshes (accepted; no short token lifetimes) |
+| Message identity | Message id; the sender's `clientId` makes sends idempotent |
+| Message content | Stored exactly as typed; must contain non-whitespace, max 4000 characters |
+| Pagination cursor | Opaque base64url of `[createdAt, id]`; default 50, max 100 per page |
+| Reconnect | Refetch the newest page on every join and merge by id; restart from it if it does not connect |
+| Conversation order | By last activity (`updated_at`, bumped by each new message) |
 | Enums | Postgres enums built from the shared Zod value lists |
 | Realtime messaging | Postgres Changes vs Broadcast tradeoff presented before Phase 4 |
 | TURN | Documented limitation in Phase 7; hosted provider only when needed |
@@ -125,7 +172,12 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
   run an esbuild dev server, so the advisory does not apply. `npm audit fix --force` would downgrade
   drizzle-kit to 0.18, so it is intentionally not applied.
 - TypeScript is pinned to 6.0.x because typescript-eslint does not support TypeScript 7 yet.
-- The frontend bundle is ~587 kB (168 kB gzipped), mostly React and supabase-js; Vite warns above
+- The frontend bundle is ~620 kB (177 kB gzipped), mostly React and supabase-js; Vite warns above
   500 kB. Code splitting is part of the Phase 9 performance audit.
+- Only the open conversation streams live. The conversation list catches up when the browser tab
+  becomes visible again; a per-user channel for live list updates and unread counts belongs to
+  Phase 5.
+- The composer grows with its text in browsers that support `field-sizing: content`; elsewhere it
+  stays one line tall and scrolls.
 - Access tokens stay valid until they expire (default 1 hour) even after logout; logout revokes the
   refresh token.

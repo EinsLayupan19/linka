@@ -23,6 +23,8 @@ conversations ─────────┘
 | `0000_profiles`           | generated | `profiles`, its constraints and select-own policy                   |
 | `0001_rls_helpers`        | custom    | `private` schema and `private.is_conversation_member()`             |
 | `0002_conversations`      | generated | Enums, the six conversation tables, indexes, RLS and policies, username prefix index |
+| `0003_message_cursor_and_retries` | generated | `messages.created_at` to millisecond precision; `messages.client_id` and its unique index |
+| `0004_message_broadcast`  | custom    | `message.created` broadcast trigger; `private.can_access_conversation_topic()`; RLS policy on `realtime.messages` |
 
 None are applied to a hosted database yet (no Supabase project).
 
@@ -95,15 +97,32 @@ and the pair no longer blocks anything.
 | `conversation_id` | `uuid`         | → `conversations`, `cascade`                             |
 | `sender_id`       | `uuid` null    | → `profiles`, `set null` (history survives account deletion) |
 | `type`            | `message_type` | Default `text`                                           |
-| `content`         | `text` null    | `text` messages: not null, not blank, at most 4000 chars |
-| `created_at`      | `timestamptz`  |                                                          |
+| `content`         | `text` null    | `text` messages: not null, not blank, at most 4000 chars; stored as typed |
+| `created_at`      | `timestamptz(3)` | Millisecond precision, matching API timestamps and cursors exactly |
+| `client_id`       | `uuid` null    | Sender's idempotency key; unique per sender              |
 | `edited_at`       | `timestamptz` null | Per PLAN.md (editing UI comes later)                  |
 | `deleted_at`      | `timestamptz` null | Soft delete: keeps cursors and history consistent     |
 
 **Ordering and pagination.** Messages are ordered by `(created_at, id)`; the id breaks ties
-between messages created in the same instant. The cursor for "older messages" is the last
-`(created_at, id)` seen. `content` is nullable so future types (for example attachment-only
-messages) do not need a rewrite; the CHECK only constrains `text` messages.
+between messages created in the same millisecond. Pages are read with a row-value comparison
+`(created_at, id) < (cursor)` on the `(conversation_id, created_at, id)` index; see the cursor
+format in [ARCHITECTURE.md](ARCHITECTURE.md#message-pagination). `content` is nullable so future
+types (for example attachment-only messages) do not need a rewrite; the CHECK only constrains
+`text` messages.
+
+**Retries.** `messages_sender_client_id_idx` is a partial unique index on `(sender_id, client_id)`
+(where `client_id` is set). Sending again with the same `client_id` finds the original row instead
+of inserting a duplicate, including when two attempts race.
+
+**Activity.** Storing a message sets `conversations.updated_at` to the message's `created_at` (in the
+same transaction), so conversation lists sort by last activity without another column.
+
+**Realtime trigger.** `messages_broadcast_created` (`AFTER INSERT`, per row) calls
+`private.broadcast_message_created()`, which sends event `message.created` on the private topic
+`conversation:<conversation_id>` via `realtime.send()`. The payload has exactly the shape of the
+shared `Message` contract (camelCase, `createdAt` formatted like JavaScript's `toISOString()`).
+Errors from `realtime.send()` are caught and logged as warnings: the message is stored regardless.
+Retries that find an existing row do not insert, so they do not broadcast again.
 
 ### `message_attachments`
 
@@ -148,6 +167,7 @@ Primary key `(call_id, user_id)`. `call_id` → `calls` (`cascade`), `user_id` �
 | `conversations_direct_pair_unique`      | Finding the existing 1:1 conversation of two users        |
 | `messages_conversation_created_idx` `(conversation_id, created_at, id)` | History and cursor pagination in both directions; also plain `conversation_id` lookups, so no separate index |
 | `messages_sender_id_idx`                | `ON DELETE SET NULL` when a user is deleted; "messages by user" |
+| `messages_sender_client_id_idx` (partial unique) | Finding a retried send by `(sender_id, client_id)`; prevents duplicates |
 | `message_attachments_message_id_idx`    | Attachments of a page of messages                         |
 | `calls_conversation_created_idx`        | Call history of a conversation                            |
 | `call_participants_user_id_idx`         | A user's calls; `ON DELETE CASCADE` from profiles         |
@@ -175,6 +195,12 @@ has exactly one policy, for `SELECT`, for the `authenticated` role:
 There are **no insert, update or delete policies**: browser clients with the publishable key cannot
 write any of these tables. All writes go through the API, which validates input and checks roles.
 `anon` has no policies at all.
+
+**Realtime channels (`realtime.messages`, Supabase's table).** Policy
+`linka_conversation_members_receive_broadcasts`: `authenticated` users may `SELECT` Broadcast
+messages only when `private.can_access_conversation_topic((select realtime.topic()))` is true, i.e.
+the topic is exactly `conversation:<uuid>` and they are a member. Supabase uses this to authorize
+joining a private channel. No INSERT policy: browser clients cannot publish on these topics.
 
 **The membership helper.** Policies call `private.is_conversation_member(conversation_id)`
 (migration `0001_rls_helpers`). A policy on `conversation_members` that queried
@@ -224,7 +250,9 @@ nullable columns therefore say `is not null` explicitly (for example `conversati
 
 Database tests run the real migrations against **PGlite**, an in-memory Postgres (test-only, not a
 development database). `backend/src/test/db.ts` recreates the parts of Supabase the migrations use:
-the `anon` and `authenticated` roles with Supabase's default table grants, `auth.users`, and
-`auth.uid()` reading the request's JWT claims. Tests switch to those roles to check RLS the way the
+the `anon` and `authenticated` roles with Supabase's default table grants, `auth.users`,
+`auth.uid()` reading the request's JWT claims, and a reduced `realtime` schema (`realtime.messages`
+with RLS, `realtime.send()`, `realtime.topic()`). Channel joins are simulated the way Supabase
+authorizes them: insert a probe message for the topic, try to read it as the user, roll back. Tests switch to those roles to check RLS the way the
 Data API applies it, and a control test disables RLS inside a rolled-back transaction to prove the
 policies are what block outsiders.

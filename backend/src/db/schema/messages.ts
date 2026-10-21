@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { bigint, check, index, pgPolicy, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigint, check, index, pgPolicy, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { authenticatedRole } from 'drizzle-orm/supabase';
 import { conversations } from './conversations.js';
 import { messageType } from './enums.js';
@@ -24,7 +24,13 @@ export const messages = pgTable(
     senderId: uuid('sender_id').references(() => profiles.id, { onDelete: 'set null' }),
     type: messageType('type').notNull().default('text'),
     content: text('content'),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * Millisecond precision on purpose: it is exactly what JavaScript dates, the API and
+     * pagination cursors carry, so a cursor never sits a few microseconds off a row.
+     */
+    createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+    /** The sender's idempotency key: a retried send with the same key finds this row. */
+    clientId: uuid('client_id'),
     editedAt: timestamp('edited_at', { withTimezone: true }),
     /** Soft delete: the row stays so pagination cursors and replies keep working. */
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
@@ -35,6 +41,10 @@ export const messages = pgTable(
     index('messages_conversation_created_idx').on(table.conversationId, table.createdAt, table.id),
     // Keeps "ON DELETE SET NULL" fast when a user is deleted, and "messages by user" lookups.
     index('messages_sender_id_idx').on(table.senderId),
+    // Retries cannot create duplicates: one message per (sender, clientId).
+    uniqueIndex('messages_sender_client_id_idx')
+      .on(table.senderId, table.clientId)
+      .where(sql`${table.clientId} is not null`),
     // "is not null" is explicit: a CHECK that evaluates to NULL counts as passing.
     check(
       'messages_text_content',

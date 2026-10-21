@@ -3,13 +3,16 @@ import { z } from 'zod';
 import {
   addMembersSchema,
   createConversationSchema,
+  createMessageSchema,
   ErrorCode,
+  messagePageQuerySchema,
   updateConversationSchema,
   updateMemberRoleSchema,
 } from '@linka/shared';
 import { authUser, requireAuth } from '../middleware/requireAuth.js';
 import type { VerifyAccessToken } from '../services/auth.js';
 import type { ConversationStore } from '../services/conversations.js';
+import type { MessageStore } from '../services/messages.js';
 import { conversationNotFound } from '../services/membership.js';
 import { AppError } from '../utils/AppError.js';
 import { parseBody } from '../validation/parseBody.js';
@@ -23,6 +26,7 @@ const uuid = z.uuid();
 export function conversationsRouter(deps: {
   verifyAccessToken: VerifyAccessToken | null;
   conversations: ConversationStore | null;
+  messages: MessageStore | null;
 }): Router {
   const router = Router();
 
@@ -32,11 +36,17 @@ export function conversationsRouter(deps: {
     next();
   });
 
+  const databaseUnavailable = () =>
+    new AppError(503, ErrorCode.ServiceUnavailable, 'The database is not configured on the server.');
+
   function store(): ConversationStore {
-    if (!deps.conversations) {
-      throw new AppError(503, ErrorCode.ServiceUnavailable, 'The database is not configured on the server.');
-    }
+    if (!deps.conversations) throw databaseUnavailable();
     return deps.conversations;
+  }
+
+  function messageStore(): MessageStore {
+    if (!deps.messages) throw databaseUnavailable();
+    return deps.messages;
   }
 
   // A malformed id can never match a conversation: answer like any unknown conversation.
@@ -81,6 +91,23 @@ export function conversationsRouter(deps: {
     const { role } = parseBody(updateMemberRoleSchema, req.body);
     const id = conversationId(req.params.conversationId);
     res.json(await store().updateMemberRole(authUser(req).userId, id, memberId(req.params.userId), role));
+  });
+
+  // Message history, newest page first; `before` pages backwards with an opaque cursor.
+  router.get('/:conversationId/messages', async (req, res) => {
+    const query = parseBody(messagePageQuerySchema, req.query);
+    const id = conversationId(req.params.conversationId);
+    res.json(await messageStore().list(authUser(req).userId, id, query));
+  });
+
+  // Send a text message. The API is the only way messages are written; the database then
+  // broadcasts it to the conversation's realtime channel. A retry with the same clientId
+  // returns the original message with 200 instead of creating a duplicate.
+  router.post('/:conversationId/messages', async (req, res) => {
+    const input = parseBody(createMessageSchema, req.body);
+    const id = conversationId(req.params.conversationId);
+    const { message, created } = await messageStore().create(authUser(req).userId, id, input);
+    res.status(created ? 201 : 200).json(message);
   });
 
   // Remove a member, or leave the group when :userId is yourself.

@@ -40,7 +40,8 @@ describe('messages', () => {
     const [maya, jonas] = [await t.createUser(), await t.createUser()];
     const conversationId = await groupWith(maya, jonas);
 
-    const message = messageSchema.parse(await messageStore.create(jonas, conversationId, { content: 'Hello' }));
+    const { message: created } = await messageStore.create(jonas, conversationId, { content: 'Hello', clientId: randomUUID() });
+    const message = messageSchema.parse(created);
 
     expect(message).toMatchObject({ conversationId, senderId: jonas, type: 'text', content: 'Hello', editedAt: null });
     const { rows } = await t.client.query('select conversation_id, sender_id from messages where id = $1', [message.id]);
@@ -51,13 +52,13 @@ describe('messages', () => {
     const [maya, jonas, outsider] = [await t.createUser(), await t.createUser(), await t.createUser()];
     const conversationId = await groupWith(maya, jonas);
 
-    await expectAppError(messageStore.create(outsider, conversationId, { content: 'Let me in' }), 404, 'CONVERSATION_NOT_FOUND');
+    await expectAppError(messageStore.create(outsider, conversationId, { content: 'Let me in', clientId: randomUUID() }), 404, 'CONVERSATION_NOT_FOUND');
     const { rows } = await t.client.query('select 1 from messages where conversation_id = $1', [conversationId]);
     expect(rows).toEqual([]);
   });
 
   it('refuses messages to a conversation that does not exist', async () => {
-    await expectAppError(messageStore.create(await t.createUser(), randomUUID(), { content: 'Hi' }), 404, 'CONVERSATION_NOT_FOUND');
+    await expectAppError(messageStore.create(await t.createUser(), randomUUID(), { content: 'Hi', clientId: randomUUID() }), 404, 'CONVERSATION_NOT_FOUND');
   });
 
   it('refuses messages from someone who has left', async () => {
@@ -65,7 +66,7 @@ describe('messages', () => {
     const conversationId = await groupWith(maya, jonas);
     await conversations.removeMember(jonas, conversationId, jonas);
 
-    await expectAppError(messageStore.create(jonas, conversationId, { content: 'Still here?' }), 404, 'CONVERSATION_NOT_FOUND');
+    await expectAppError(messageStore.create(jonas, conversationId, { content: 'Still here?', clientId: randomUUID() }), 404, 'CONVERSATION_NOT_FOUND');
   });
 });
 
