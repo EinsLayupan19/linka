@@ -20,10 +20,19 @@ export const ErrorCode = {
   BadRequest: 'BAD_REQUEST',
   ValidationFailed: 'VALIDATION_FAILED',
   Unauthorized: 'UNAUTHORIZED',
+  /** Signed in and a member, but the role does not allow this action. */
+  Forbidden: 'FORBIDDEN',
   NotFound: 'NOT_FOUND',
   ProfileNotFound: 'PROFILE_NOT_FOUND',
   ProfileExists: 'PROFILE_EXISTS',
   UsernameTaken: 'USERNAME_TAKEN',
+  /** Also returned to non-members, so the API never reveals that a conversation exists. */
+  ConversationNotFound: 'CONVERSATION_NOT_FOUND',
+  MemberNotFound: 'MEMBER_NOT_FOUND',
+  AlreadyMember: 'ALREADY_MEMBER',
+  /** The owner must transfer ownership before leaving. */
+  OwnerCannotLeave: 'OWNER_CANNOT_LEAVE',
+  CallInProgress: 'CALL_IN_PROGRESS',
   PayloadTooLarge: 'PAYLOAD_TOO_LARGE',
   ServiceUnavailable: 'SERVICE_UNAVAILABLE',
   Internal: 'INTERNAL_ERROR',

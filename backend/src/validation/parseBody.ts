@@ -3,7 +3,7 @@ import { ErrorCode } from '@linka/shared';
 import { AppError } from '../utils/AppError.js';
 
 /**
- * Validates a request body with a shared Zod schema.
+ * Validates a request body (or query) with a shared Zod schema.
  * Returns the parsed (trimmed, normalised) data or throws a 400 with per-field messages.
  */
 export function parseBody<T>(schema: z.ZodType<T>, body: unknown): T {

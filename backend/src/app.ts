@@ -6,9 +6,11 @@ import { env } from './config/env.js';
 import { db } from './db/client.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
+import { conversationsRouter } from './routes/conversations.js';
 import { healthRouter } from './routes/health.js';
 import { usersRouter } from './routes/users.js';
 import { createSupabaseTokenVerifier, type VerifyAccessToken } from './services/auth.js';
+import { createConversationStore, type ConversationStore } from './services/conversations.js';
 import { checkDatabase } from './services/health.js';
 import { createProfileStore, type ProfileStore } from './services/profiles.js';
 
@@ -16,8 +18,9 @@ export interface AppDependencies {
   checkDatabase: () => Promise<DatabaseStatus>;
   /** null when SUPABASE_URL is not configured: protected routes answer 503. */
   verifyAccessToken: VerifyAccessToken | null;
-  /** null when DATABASE_URL is not configured. */
+  /** null when DATABASE_URL is not configured (also for conversations). */
   profiles: ProfileStore | null;
+  conversations: ConversationStore | null;
 }
 
 function defaultDependencies(): AppDependencies {
@@ -25,6 +28,7 @@ function defaultDependencies(): AppDependencies {
     checkDatabase,
     verifyAccessToken: env.SUPABASE_URL ? createSupabaseTokenVerifier(env.SUPABASE_URL) : null,
     profiles: db ? createProfileStore(db) : null,
+    conversations: db ? createConversationStore(db) : null,
   };
 }
 
@@ -42,6 +46,7 @@ export function createApp(overrides: Partial<AppDependencies> = {}): Express {
 
   app.use('/api/health', healthRouter(deps.checkDatabase));
   app.use('/api/users', usersRouter(deps));
+  app.use('/api/conversations', conversationsRouter(deps));
 
   app.use(notFound);
   app.use(errorHandler);

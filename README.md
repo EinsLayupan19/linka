@@ -3,7 +3,7 @@
 A real-time messaging and calling platform: 1:1 and group chats, read/delivery states, presence,
 typing indicators, file sharing, and WebRTC voice/video calls.
 
-> Status: **Phase 2 (authentication & profiles)**. See [docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md).
+> Status: **Phase 3 (conversations & database foundation)**. See [docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md).
 
 ## Tech stack
 

@@ -1,5 +1,11 @@
 import { Router } from 'express';
-import { createProfileSchema, ErrorCode, updateProfileSchema } from '@linka/shared';
+import {
+  createProfileSchema,
+  ErrorCode,
+  updateProfileSchema,
+  USER_SEARCH_LIMIT,
+  userSearchQuerySchema,
+} from '@linka/shared';
 import { authUser, requireAuth } from '../middleware/requireAuth.js';
 import type { VerifyAccessToken } from '../services/auth.js';
 import type { ProfileStore } from '../services/profiles.js';
@@ -8,6 +14,7 @@ import { parseBody } from '../validation/parseBody.js';
 
 /**
  * /api/users/me: the signed-in user's own profile.
+ * /api/users/search: find other users by username.
  * The user ID always comes from the verified access token, never from the request.
  */
 export function usersRouter(deps: {
@@ -29,6 +36,14 @@ export function usersRouter(deps: {
     }
     return deps.profiles;
   }
+
+  // Username-based discovery: prefix match, signed-in users only, small result set,
+  // public fields only (never email).
+  router.get('/search', async (req, res) => {
+    const { q } = parseBody(userSearchQuerySchema, req.query);
+    const users = await profiles().searchByUsername(q, { excludeUserId: authUser(req).userId, limit: USER_SEARCH_LIMIT });
+    res.json({ users });
+  });
 
   router.get('/me', async (req, res) => {
     const profile = await profiles().findById(authUser(req).userId);

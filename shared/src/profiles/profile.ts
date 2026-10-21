@@ -48,3 +48,32 @@ export const profileSchema = z.object({
 });
 
 export type Profile = z.infer<typeof profileSchema>;
+
+/** The public part of a profile that other users may see. Never includes email. */
+export const userSummarySchema = profileSchema.pick({
+  id: true,
+  username: true,
+  displayName: true,
+  avatarPath: true,
+});
+
+export type UserSummary = z.infer<typeof userSummarySchema>;
+
+export const USER_SEARCH_MIN_LENGTH = 2;
+export const USER_SEARCH_LIMIT = 20;
+
+/** Query of GET /api/users/search: a username prefix, at least 2 characters. */
+export const userSearchQuerySchema = z.object({
+  q: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .min(USER_SEARCH_MIN_LENGTH, `Type at least ${USER_SEARCH_MIN_LENGTH} characters.`)
+    .max(USERNAME_MAX_LENGTH, `Usernames are at most ${USERNAME_MAX_LENGTH} characters.`),
+});
+
+export const userSearchResultSchema = z.object({
+  users: z.array(userSummarySchema),
+});
+
+export type UserSearchResult = z.infer<typeof userSearchResultSchema>;

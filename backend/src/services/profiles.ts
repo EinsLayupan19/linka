@@ -1,14 +1,23 @@
-import { eq } from 'drizzle-orm';
-import { ErrorCode, type CreateProfileInput, type Profile, type UpdateProfileInput } from '@linka/shared';
+import { and, asc, eq, like, ne, sql } from 'drizzle-orm';
+import {
+  ErrorCode,
+  type CreateProfileInput,
+  type Profile,
+  type UpdateProfileInput,
+  type UserSummary,
+} from '@linka/shared';
 import type { Database } from '../db/client.js';
+import { FOREIGN_KEY_VIOLATION, postgresErrorCode, UNIQUE_VIOLATION } from '../db/errors.js';
 import { profiles, type ProfileRow } from '../db/schema/index.js';
 import { AppError } from '../utils/AppError.js';
 
-/** Profile operations. Every method acts on the given user's own profile only. */
+/** Profile operations. Write methods act on the given user's own profile only. */
 export interface ProfileStore {
   findById(userId: string): Promise<Profile | null>;
   create(userId: string, input: CreateProfileInput): Promise<Profile>;
   update(userId: string, input: UpdateProfileInput): Promise<Profile | null>;
+  /** Public summaries of users whose username starts with `prefix` (already lowercase). */
+  searchByUsername(prefix: string, options: { excludeUserId: string; limit: number }): Promise<UserSummary[]>;
 }
 
 function toProfile(row: ProfileRow): Profile {
@@ -22,17 +31,10 @@ function toProfile(row: ProfileRow): Profile {
   };
 }
 
-// Drizzle wraps driver errors, so check the error and its cause for a Postgres error code.
-function postgresErrorCode(error: unknown): string | undefined {
-  for (let current: unknown = error; current instanceof Error; current = current.cause) {
-    const code = (current as { code?: unknown }).code;
-    if (typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)) return code;
-  }
-  return undefined;
+/** Escapes LIKE wildcards so user input only ever matches literally. */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
-
-const UNIQUE_VIOLATION = '23505';
-const FOREIGN_KEY_VIOLATION = '23503';
 
 export function createProfileStore(db: Database): ProfileStore {
   async function findById(userId: string): Promise<Profile | null> {
@@ -77,6 +79,23 @@ export function createProfileStore(db: Database): ProfileStore {
         .where(eq(profiles.id, userId))
         .returning();
       return row ? toProfile(row) : null;
+    },
+
+    async searchByUsername(prefix, { excludeUserId, limit }) {
+      // Usernames are stored lowercase, so a plain prefix LIKE on a lowercased query is
+      // case-insensitive and can use the text_pattern_ops index.
+      return db
+        .select({
+          id: profiles.id,
+          username: profiles.username,
+          displayName: profiles.displayName,
+          avatarPath: profiles.avatarPath,
+        })
+        .from(profiles)
+        .where(and(like(profiles.username, `${escapeLike(prefix)}%`), ne(profiles.id, excludeUserId)))
+        // Exact match first, then alphabetical.
+        .orderBy(sql`${profiles.username} = ${prefix} desc`, asc(profiles.username))
+        .limit(limit);
     },
   };
 }

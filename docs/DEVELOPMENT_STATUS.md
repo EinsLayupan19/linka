@@ -3,8 +3,8 @@
 | Phase | Name                                   | Status      |
 | ----- | -------------------------------------- | ----------- |
 | 1     | Foundation                             | Complete    |
-| 2     | Authentication & user foundation       | In review   |
-| 3     | Database & conversation foundation     | Not started |
+| 2     | Authentication & user foundation       | Complete    |
+| 3     | Database & conversation foundation     | In review   |
 | 4     | Realtime messaging                     | Not started |
 | 5     | Read, delivery, presence & typing      | Not started |
 | 6     | Media & file sharing                   | Not started |
@@ -42,6 +42,31 @@ Not verifiable until a Supabase project exists:
 - Token verification against the project's real JWKS endpoint
 - Applying the migration to the hosted database and RLS there (tested on PGlite only)
 
+## Phase 3: Conversations & database foundation
+
+Done:
+
+- Tables: `conversations`, `conversation_members`, `messages`, `message_attachments`, `calls`,
+  `call_participants` with Postgres enums, foreign keys, CHECK constraints and indexes
+  (migrations `0001_rls_helpers`, `0002_conversations`); see [DATABASE.md](DATABASE.md)
+- Duplicate 1:1 conversations prevented by the database (ordered, unique user pair)
+- RLS on every table: members-only `SELECT` via `private.is_conversation_member()`, no write policies
+- API: create/list/read/rename conversations, add/remove members, change roles, transfer
+  ownership, leave; all authorized by membership and role
+- Username search: `GET /api/users/search` (prefix, case-insensitive, max 20, no email)
+- Member-checked services for storing messages and starting calls (no routes yet)
+- Tests: RLS and constraints on real Postgres (PGlite) with guard and control tests, role rules,
+  every conversation route, search, messages, calls
+
+Not in this phase (by design): any frontend UI, message routes and pagination, realtime, uploads,
+calls beyond the database.
+
+Not verifiable until a Supabase project exists:
+
+- Applying migrations `0000`-`0002` to the hosted database
+- RLS and the `private` helper on hosted Supabase (tested on PGlite only)
+- That the `private` schema stays unexposed in the project's API settings (default)
+
 ### Supabase setup (dashboard)
 
 1. **Create the project** (hosted). Then copy:
@@ -58,7 +83,9 @@ Not verifiable until a Supabase project exists:
    - Redirect URLs: add `http://localhost:5173/**`.
 4. **Email confirmation.** *Authentication > Sign In / Providers > Email*: keep "Confirm email" on.
 5. **Password length.** Same page: set the minimum password length to **8** to match the app.
-6. **Apply the migration:** `cd backend && npm run db:migrate`.
+6. **Apply the migrations:** `cd backend && npm run db:migrate`.
+7. **API exposed schemas.** *Project Settings > Data API > Exposed schemas*: leave the default
+   (`public`, `graphql_public`). Do **not** add `private`: it holds the RLS helper function.
 
 Supabase's built-in email service is heavily rate limited and meant for testing; configure custom
 SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
@@ -75,11 +102,19 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
 | Token verification | Local JWT verification against the project's JWKS (ES256/RS256 only) |
 | Profile creation | Onboarding step after first login (`POST /api/users/me`), not at sign-up |
 | Profile writes | API only; RLS has a select-own policy and no write policies |
-| Profile visibility | Own profile only in Phase 2; widened in Phase 3 / discovery |
+| Profile visibility | Own full profile; public fields of fellow members and search results via the API. RLS: own row only |
 | Username | Unique, lowercase `a-z 0-9 _`, 3-20 chars; not editable yet |
-| User discovery | Username-based (not email). Designed in the relevant phase |
+| User discovery | Username prefix search, signed-in only, max 20 results, never email |
 | Profile pictures | Media/storage phase (6) |
-| Group roles | `owner`, `admin`, `member`. Defined in Phase 3 |
+| Group roles | `owner`, `admin`, `member`; rules in ARCHITECTURE.md and `conversationPermissions.ts` |
+| Ownership | Exactly one owner; leaves only after transferring; transfer makes the old owner an admin |
+| 1:1 conversations | Exactly two members, unique per pair (database), cannot be left or changed; creating an existing one returns it |
+| Non-member access | 404, same as a missing conversation (existence is never revealed) |
+| Conversation writes | API only; RLS is select-only on every table |
+| Deleted accounts | Their messages stay with `sender_id = null`; memberships are removed |
+| Message ordering | `(created_at, id)`, cursor-ready; soft delete via `deleted_at` |
+| Read/delivery markers | Columns exist on `conversation_members` (PLAN.md §5), logic in Phase 5 |
+| Enums | Postgres enums built from the shared Zod value lists |
 | Realtime messaging | Postgres Changes vs Broadcast tradeoff presented before Phase 4 |
 | TURN | Documented limitation in Phase 7; hosted provider only when needed |
 

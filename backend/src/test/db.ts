@@ -41,6 +41,8 @@ export interface TestDatabase {
   client: PGlite;
   /** Inserts a user into auth.users, as Supabase Auth does on sign-up. */
   createAuthUser(email?: string): Promise<string>;
+  /** A signed-up user who has also set up a profile. Returns the user id. */
+  createUser(username?: string): Promise<string>;
   /** Runs queries as a Supabase role, the way the Data API / Realtime would for that request. */
   asRole<T>(role: 'anon' | 'authenticated', userId: string | null, run: (tx: Transaction) => Promise<T>): Promise<T>;
   close(): Promise<void>;
@@ -53,13 +55,26 @@ export async function createTestDatabase(): Promise<TestDatabase> {
   const db = drizzle(client, { schema });
   await migrate(db, { migrationsFolder });
 
+  async function createAuthUser(email = `${randomUUID()}@example.test`) {
+    const id = randomUUID();
+    await client.query('insert into auth.users (id, email) values ($1, $2)', [id, email]);
+    return id;
+  }
+
+  let userCount = 0;
+
   return {
     db,
     client,
+    createAuthUser,
 
-    async createAuthUser(email = `${randomUUID()}@example.test`) {
-      const id = randomUUID();
-      await client.query('insert into auth.users (id, email) values ($1, $2)', [id, email]);
+    async createUser(username = `user_${++userCount}_${randomUUID().slice(0, 6)}`) {
+      const id = await createAuthUser(`${username}@example.test`);
+      await client.query('insert into profiles (id, username, display_name) values ($1, $2, $3)', [
+        id,
+        username,
+        username,
+      ]);
       return id;
     },
 

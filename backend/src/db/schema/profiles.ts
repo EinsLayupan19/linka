@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, pgPolicy, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { check, index, pgPolicy, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { authenticatedRole, authUid, authUsers } from 'drizzle-orm/supabase';
 
 /**
@@ -28,6 +28,9 @@ export const profiles = pgTable(
   (table) => [
     // Same rules as the shared Zod schemas, enforced again by the database.
     check('profiles_username_format', sql`${table.username} ~ '^[a-z0-9_]{3,20}$'`),
+    // Username prefix search (LIKE 'abc%'). The unique index above cannot serve LIKE
+    // under a non-C collation; text_pattern_ops can.
+    index('profiles_username_prefix_idx').on(table.username.op('text_pattern_ops')),
     check(
       'profiles_display_name_length',
       sql`char_length(${table.displayName}) <= 50 and btrim(${table.displayName}) <> ''`,

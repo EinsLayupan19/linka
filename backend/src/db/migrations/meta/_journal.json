@@ -8,6 +8,20 @@
       "when": 1792572395404,
       "tag": "0000_profiles",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792598341416,
+      "tag": "0001_rls_helpers",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792598646795,
+      "tag": "0002_conversations",
+      "breakpoints": true
     }
   ]
 }

@@ -59,10 +59,11 @@ username and display name (`POST /api/users/me`). Usernames are chosen there rat
 because, with email confirmation on, sign-up returns no session, and a taken username would otherwise
 surface as a confusing sign-up failure.
 
-**Privacy model (Phase 2).** A user can read and change only their own profile. Profiles of other
-users are not visible yet; this is widened deliberately later (conversation members in Phase 3,
-username-based discovery when contacts are built). Email addresses stay in Supabase `auth.users` and
-are never copied into `profiles`.
+**Privacy model.** A user can read and change only their own full profile. Since Phase 3 the API
+also shows other users' *public* fields (`id`, `username`, `displayName`, `avatarPath`) in two
+places: to fellow members of a conversation, and in username search. Direct database access (RLS)
+still allows reading only your own profile row. Email addresses stay in Supabase `auth.users`, are
+never copied into `profiles` and are never returned for other users.
 
 **Known limitation.** Access tokens are stateless: after logout or account deletion, an already
 issued access token stays valid until it expires (Supabase default: 1 hour). Logout revokes the
@@ -76,8 +77,8 @@ refresh token, so it cannot be renewed.
 | `app.ts`               | Builds the Express app (no `listen`), so tests can use it directly |
 | `config/`              | Loads and validates environment variables with Zod (fails fast)     |
 | `middleware/`          | Cross-cutting concerns: `requireAuth`, 404 handler, error handler   |
-| `routes/`              | URL -> handler mapping. Kept thin (`health`, `users`)               |
-| `services/`            | Business logic (`auth` token verification, `profiles`, `health`)    |
+| `routes/`              | URL -> handler mapping. Kept thin (`health`, `users`, `conversations`) |
+| `services/`            | Business logic: `auth` (tokens), `profiles`, `conversations`, `membership`, `conversationPermissions`, `messages`, `calls`, `health` |
 | `validation/`          | `parseBody`: shared Zod schema -> parsed data or 400 with field errors |
 | `db/`                  | Drizzle client, schema and migrations                               |
 | `utils/`               | Small helpers (`AppError`)                                          |
@@ -85,16 +86,60 @@ refresh token, so it cannot be renewed.
 
 `controllers/` from PLAN.md is created if route handlers grow beyond a few lines.
 
-**API (Phase 2).** All require `Authorization: Bearer <access token>` and act on the caller only.
+**API: users.** All require `Authorization: Bearer <access token>` and act on the caller only.
 
 | Method | Path            | Body                          | Result                                    |
 | ------ | --------------- | ----------------------------- | ----------------------------------------- |
 | GET    | `/api/users/me` |                               | 200 profile, 404 `PROFILE_NOT_FOUND`      |
 | POST   | `/api/users/me` | `{ username, displayName }`   | 201 profile, 409 `USERNAME_TAKEN` / `PROFILE_EXISTS` |
 | PATCH  | `/api/users/me` | `{ displayName }`             | 200 profile, 404 `PROFILE_NOT_FOUND`      |
+| GET    | `/api/users/search?q=` |                        | 200 `{ users }`: username prefix (2+ chars), case-insensitive, max 20, excludes you, public fields only |
 
-Bodies are strict: unknown fields (for example `id`) are rejected with 400 `VALIDATION_FAILED`.
-Responses are `Cache-Control: private, no-store`.
+**API (Phase 3): conversations.** All require a token. `:conversationId` and `:userId` are UUIDs.
+
+| Method | Path                                            | Body                                   | Who                    |
+| ------ | ----------------------------------------------- | -------------------------------------- | ---------------------- |
+| GET    | `/api/conversations`                            |                                        | Your 50 most recently updated |
+| POST   | `/api/conversations`                            | `{ type: 'direct', userId }` or `{ type: 'group', name, memberIds }` | Any signed-in user; creator becomes owner (groups) |
+| GET    | `/api/conversations/:conversationId`            |                                        | Members                |
+| PATCH  | `/api/conversations/:conversationId`            | `{ name }`                             | Group owner, admins    |
+| POST   | `/api/conversations/:conversationId/members`    | `{ userIds }`                          | Group owner, admins    |
+| PATCH  | `/api/conversations/:conversationId/members/:userId` | `{ role }` (`owner` = transfer)   | Group owner            |
+| DELETE | `/api/conversations/:conversationId/members/:userId` |                                   | See role rules; your own id = leave |
+
+- `POST` a 1:1 conversation that already exists returns it with **200** instead of creating a
+  duplicate (201 when created). Both orders of the two users map to the same conversation.
+- Non-members always get **404 `CONVERSATION_NOT_FOUND`**, the same answer as for a conversation
+  that does not exist, so the API never confirms which conversations exist. Members without the
+  required role get **403 `FORBIDDEN`**.
+- Conversations include their members with public profile fields only.
+
+Bodies are strict: unknown fields (for example `id`, `createdBy`, `senderId`) are rejected with 400
+`VALIDATION_FAILED`. Responses are `Cache-Control: private, no-store`.
+
+**Role rules (groups).** Defined once in `services/conversationPermissions.ts`:
+
+| Action                       | owner                          | admin           | member |
+| ---------------------------- | ------------------------------ | --------------- | ------ |
+| Read, send messages          | yes                            | yes             | yes    |
+| Rename the group             | yes                            | yes             | no     |
+| Add members                  | yes                            | yes             | no     |
+| Remove a regular member      | yes                            | yes             | no     |
+| Remove an admin              | yes                            | no              | no     |
+| Promote / demote / transfer  | yes                            | no              | no     |
+| Leave                        | only after transferring ownership | yes          | yes    |
+
+Nobody can remove or demote the owner; ownership moves only by transfer (the old owner becomes an
+admin). 1:1 conversations have no roles to manage and cannot be left or changed.
+
+**Authorization is centralized.** Every operation inside a conversation goes through
+`requireMembership()` (404 for non-members) and then the role rules above. The message and call
+services (`services/messages.ts`, `services/calls.ts`) use the same check; they have no routes yet.
+Sending and reading messages over HTTP arrives with messaging (Phase 4), call routes with calling
+(Phase 7).
+
+**Limits.** Groups have at most 100 members (bounded member lists and future realtime fan-out).
+Conversation lists return the 50 most recent; cursor pagination for long lists is part of Phase 4.
 
 **Errors.** Throw `AppError(status, code, message)` for errors the client may see. Anything else
 becomes a generic `500 INTERNAL_ERROR`; the details are logged on the server only. All errors use the
