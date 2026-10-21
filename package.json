@@ -1,0 +1,31 @@
+{
+  "name": "linka",
+  "private": true,
+  "description": "Real-time messaging and calling platform.",
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "backend",
+    "frontend"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "npm run build -w @linka/shared && concurrently --names shared,api,web --prefix-colors gray,blue,green \"npm run dev -w @linka/shared\" \"npm run dev -w @linka/backend\" \"npm run dev -w @linka/frontend\"",
+    "build": "npm run build -w @linka/shared && npm run build -w @linka/backend && npm run build -w @linka/frontend",
+    "typecheck": "npm run build -w @linka/shared && npm run typecheck --workspaces",
+    "test": "npm run build -w @linka/shared && npm run test --workspaces",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "concurrently": "^10.0.6",
+    "eslint": "^10.13.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.13.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.0"
+  }
+}

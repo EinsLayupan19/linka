@@ -1,0 +1,53 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/geist';
+
+/*
+  Design tokens.
+  - Colors are semantic (canvas, ink, accent...) so dark mode only swaps values here.
+  - One accent: teal. Status colors (warning, danger) are only used for real states.
+  - Radius system: controls (buttons, inputs, links) use rounded-lg (8px),
+    panels use rounded-xl (12px), skeleton placeholders use rounded-sm. Nothing else.
+*/
+@theme {
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+
+  --color-canvas: #fafafa;
+  --color-surface: #fdfdfd;
+  --color-ink: #18181b;
+  --color-ink-muted: #52525b;
+  --color-line: #e4e4e7;
+  --color-skeleton: #e4e4e7;
+
+  --color-accent: #0f766e;
+  --color-accent-hover: #115e59;
+  --color-on-accent: #f4f4f5;
+
+  --color-warning: #b45309;
+  --color-danger: #b91c1c;
+
+  --ease-out-quick: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-canvas: #09090b;
+    --color-surface: #18181b;
+    --color-ink: #f4f4f5;
+    --color-ink-muted: #a1a1aa;
+    --color-line: #27272a;
+    --color-skeleton: #3f3f46;
+
+    --color-accent: #2dd4bf;
+    --color-accent-hover: #5eead4;
+    --color-on-accent: #09090b;
+
+    --color-warning: #fbbf24;
+    --color-danger: #f87171;
+  }
+}
+
+@layer base {
+  body {
+    @apply bg-canvas text-ink font-sans antialiased;
+  }
+}
