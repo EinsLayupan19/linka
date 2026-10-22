@@ -34,6 +34,18 @@ export function formatDayLabel(iso: string, now = new Date()): string {
   return longDateFormat.format(new Date(iso));
 }
 
+/** "Last seen just now", "Last seen 5 min ago", "Last seen today at 3:42 PM", or a date. */
+export function formatLastSeen(iso: string, now = new Date()): string {
+  const date = new Date(iso);
+  const minutes = Math.floor((now.getTime() - date.getTime()) / 60_000);
+  if (minutes < 1) return 'Last seen just now';
+  if (minutes < 60) return `Last seen ${minutes} min ago`;
+  const days = daysBetween(date, now);
+  if (days === 0) return `Last seen today at ${timeFormat.format(date)}`;
+  if (days === 1) return `Last seen yesterday at ${timeFormat.format(date)}`;
+  return `Last seen ${shortDateFormat.format(date)}`;
+}
+
 export function isSameDay(a: string, b: string): boolean {
   return startOfDay(new Date(a)).getTime() === startOfDay(new Date(b)).getTime();
 }

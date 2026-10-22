@@ -1,4 +1,4 @@
-import { Fragment, useLayoutEffect, useRef, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import type { Message } from '@linka/shared';
 import type { PendingMessage } from '../../hooks/conversationMessagesReducer';
 import { formatDayLabel, formatFullTimestamp, formatMessageTime, isSameDay } from '../../utils/time';
@@ -14,6 +14,10 @@ interface MessageListProps {
   olderStatus: 'idle' | 'loading' | 'error';
   onLoadOlder: () => void;
   onRetry: (clientId: string) => void;
+  /** Receipt text under my newest message (Sent, Delivered, Read, Read by N). */
+  receipt?: string | null;
+  /** Whether the newest messages are in view; read receipts only advance when they are. */
+  onAtBottomChange?: (atBottom: boolean) => void;
 }
 
 // "Near the bottom": close enough that new messages should keep the view pinned there.
@@ -41,9 +45,27 @@ export function MessageList({
   olderStatus,
   onLoadOlder,
   onRetry,
+  receipt = null,
+  onAtBottomChange,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const previous = useRef({ firstId: '', lastKey: '', scrollHeight: 0, nearBottom: true });
+
+  // Tell the parent when the newest messages come into or leave view (only on change).
+  const onAtBottomRef = useRef(onAtBottomChange);
+  useEffect(() => {
+    onAtBottomRef.current = onAtBottomChange;
+  });
+  const reportedAtBottom = useRef<boolean | null>(null);
+  const reportAtBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_TO_BOTTOM_PX;
+    if (atBottom !== reportedAtBottom.current) {
+      reportedAtBottom.current = atBottom;
+      onAtBottomRef.current?.(atBottom);
+    }
+  }, []);
 
   // Keep the reading position sensible as the list changes:
   // first render -> bottom; older page prepended -> stay on the same message;
@@ -63,16 +85,19 @@ export function MessageList({
       el.scrollTop = el.scrollHeight;
     }
     previous.current = { firstId, lastKey, scrollHeight: el.scrollHeight, nearBottom: before.nearBottom };
-  }, [messages, lastKey]);
+    reportAtBottom();
+  }, [messages, lastKey, reportAtBottom]);
 
   function onScroll() {
     const el = scrollRef.current;
     if (!el) return;
     previous.current.nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_TO_BOTTOM_PX;
     previous.current.scrollHeight = el.scrollHeight;
+    reportAtBottom();
   }
 
   const empty = messages.length === 0 && pending.length === 0;
+  const lastMineId = messages.findLast((m) => m.senderId === myUserId)?.id;
 
   return (
     <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
@@ -118,6 +143,11 @@ export function MessageList({
                     {formatMessageTime(message.createdAt)}
                   </time>
                 </Bubble>
+                {receipt && message.id === lastMineId && pending.length === 0 && (
+                  <p className="self-end px-1 text-xs text-ink-muted" aria-label={`Message status: ${receipt}`}>
+                    {receipt}
+                  </p>
+                )}
               </Fragment>
             );
           })}

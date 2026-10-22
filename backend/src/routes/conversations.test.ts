@@ -82,7 +82,8 @@ describe('creating conversations', () => {
     const conversation = await group(maya, [jonas]);
 
     expect(Object.keys(conversation.members[0]!).sort()).toEqual(
-      ['avatarPath', 'displayName', 'joinedAt', 'role', 'userId', 'username'].sort(),
+      // Markers and last seen are for read receipts and "Last seen", shown to fellow members only.
+      ['avatarPath', 'displayName', 'joinedAt', 'lastDeliveredAt', 'lastReadAt', 'lastSeenAt', 'role', 'userId', 'username'].sort(),
     );
     expect(JSON.stringify(conversation)).not.toContain('@example.test');
   });

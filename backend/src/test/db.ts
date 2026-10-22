@@ -80,9 +80,21 @@ export interface TestDatabase {
    * Simulates Supabase's private-channel join check: may this user read Broadcast messages
    * on `topic`? (Realtime asks RLS on realtime.messages with realtime.topic() = topic.)
    */
-  canJoinTopic(role: 'anon' | 'authenticated', userId: string | null, topic: string): Promise<boolean>;
-  /** Broadcast events stored for a topic (what Realtime would deliver), oldest first. */
-  broadcastsOn(topic: string): Promise<{ event: string; payload: unknown; private: boolean }[]>;
+  canJoinTopic(
+    role: 'anon' | 'authenticated',
+    userId: string | null,
+    topic: string,
+    extension?: 'broadcast' | 'presence',
+  ): Promise<boolean>;
+  /** May this user publish on `topic` (client broadcasts, presence tracking)? */
+  canPublishOnTopic(
+    role: 'anon' | 'authenticated',
+    userId: string | null,
+    topic: string,
+    extension?: 'broadcast' | 'presence',
+  ): Promise<boolean>;
+  /** Broadcast events stored for a topic (what Realtime would deliver), oldest first; optionally one event type. */
+  broadcastsOn(topic: string, event?: string): Promise<{ event: string; payload: unknown; private: boolean }[]>;
   close(): Promise<void>;
 }
 
@@ -127,12 +139,12 @@ export async function createTestDatabase(): Promise<TestDatabase> {
 
     asRole,
 
-    canJoinTopic(role, userId, topic) {
+    canJoinTopic(role, userId, topic, extension = 'broadcast') {
       // Like Supabase: insert a probe message, try to read it as the user, roll back.
       return client.transaction(async (tx) => {
         await tx.query(
-          "insert into realtime.messages (topic, extension, event, payload, private) values ($1, 'broadcast', 'probe', '{}', true)",
-          [topic],
+          "insert into realtime.messages (topic, extension, event, payload, private) values ($1, $2, 'probe', '{}', true)",
+          [topic, extension],
         );
         await tx.exec(`set local role ${role}`);
         const claims = JSON.stringify(userId ? { sub: userId, role } : { role });
@@ -144,10 +156,31 @@ export async function createTestDatabase(): Promise<TestDatabase> {
       });
     },
 
-    async broadcastsOn(topic) {
+    canPublishOnTopic(role, userId, topic, extension = 'broadcast') {
+      // Like Supabase: try to insert a message as the user (RLS WITH CHECK decides), roll back.
+      return client.transaction(async (tx) => {
+        await tx.exec(`set local role ${role}`);
+        const claims = JSON.stringify(userId ? { sub: userId, role } : { role });
+        await tx.query(`select set_config('request.jwt.claims', $1, true)`, [claims]);
+        await tx.query(`select set_config('realtime.topic', $1, true)`, [topic]);
+        let allowed = true;
+        try {
+          await tx.query("insert into realtime.messages (topic, extension, event, payload, private) values ($1, $2, 'probe', '{}', true)", [
+            topic,
+            extension,
+          ]);
+        } catch {
+          allowed = false;
+        }
+        await tx.rollback();
+        return allowed;
+      });
+    },
+
+    async broadcastsOn(topic, event) {
       const { rows } = await client.query<{ event: string; payload: unknown; private: boolean }>(
-        'select event, payload, private from realtime.messages where topic = $1 order by id',
-        [topic],
+        'select event, payload, private from realtime.messages where topic = $1 and ($2::text is null or event = $2) order by id',
+        [topic, event ?? null],
       );
       return rows;
     },

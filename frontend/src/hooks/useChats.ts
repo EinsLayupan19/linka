@@ -1,7 +1,15 @@
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { compareMessages, type Conversation, type Message } from '@linka/shared';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  compareMessages,
+  type Conversation,
+  type ConversationActivityEvent,
+  type ConversationChangedEvent,
+  type Message,
+} from '@linka/shared';
 import { toApiError, type ApiError } from '../lib/api';
 import { listConversations } from '../services/conversations';
+import { subscribeToUser, type LiveStatus } from '../services/realtime';
+import { createDeliveryReporter, type DeliveryReporter } from '../services/receipts';
 
 export type ConversationListState =
   | { status: 'loading' }
@@ -10,11 +18,16 @@ export type ConversationListState =
 
 export interface ChatsContextValue {
   list: ConversationListState;
+  listStatus: LiveStatus;
   refresh: () => void;
-  /** A message was sent or received: update its conversation's preview and move it up. */
+  /** A message was sent or received in this tab: update its conversation's preview. */
   applyMessage: (message: Message) => void;
   /** A conversation was opened or created. */
   upsertConversation: (conversation: Conversation) => void;
+  /** The user's read marker moved (this tab or another): update the unread count. */
+  applyRead: (conversationId: string, lastReadAt: string) => void;
+  /** Batches delivery receipts for every conversation. */
+  delivery: DeliveryReporter;
 }
 
 /** Most recent activity first; id breaks ties so the order never flickers. */
@@ -24,39 +37,55 @@ function sortByActivity(conversations: Conversation[]): Conversation[] {
   );
 }
 
+const myMember = (conversation: Conversation, myUserId: string) =>
+  conversation.members.find((m) => m.userId === myUserId);
+
 /**
- * The signed-in user's conversations. Loaded once, then kept current from what this tab sees
- * (its own sends and the open conversation's live messages), and refreshed when the tab is
- * shown again. Other conversations do not stream live yet.
+ * The signed-in user's conversations, kept live by ONE realtime subscription: their own
+ * private user channel (`user:<id>`), whatever the number of conversations.
+ *
+ * Unread counts come from the server; live events only adjust them, idempotently (each message
+ * id counts once), and every (re)join refetches the authoritative list.
  */
-export function useConversationList(): ChatsContextValue {
+export function useConversationList(myUserId: string, activeConversationId: string | null): ChatsContextValue {
   const [list, setList] = useState<ConversationListState>({ status: 'loading' });
+  const [listStatus, setListStatus] = useState<LiveStatus>('connecting');
   const [attempt, setAttempt] = useState(0);
+  const delivery = useMemo(() => createDeliveryReporter(), []);
+  useEffect(() => () => delivery.dispose(), [delivery]);
+
+  /** Message ids already counted into each conversation's unread count since the last fetch. */
+  const counted = useRef(new Map<string, Set<string>>());
+  const active = useRef(activeConversationId);
+  useEffect(() => {
+    active.current = activeConversationId;
+  }, [activeConversationId]);
+
+  const refresh = useCallback(() => setAttempt((n) => n + 1), []);
 
   useEffect(() => {
     const controller = new AbortController();
     listConversations(controller.signal).then(
-      (conversations) => setList({ status: 'ready', conversations }),
+      (conversations) => {
+        counted.current.clear();
+        setList({ status: 'ready', conversations });
+        // Everything in the list has now reached this client.
+        for (const conversation of conversations) {
+          delivery.seed(conversation.id, myMember(conversation, myUserId)?.lastDeliveredAt ?? null);
+          const last = conversation.lastMessage;
+          if (last && last.senderId !== myUserId) delivery.report(conversation.id, last.createdAt);
+        }
+      },
       (error: unknown) => {
         if (!controller.signal.aborted) setList({ status: 'error', error: toApiError(error) });
       },
     );
     return () => controller.abort();
-  }, [attempt]);
+  }, [attempt, delivery, myUserId]);
 
-  const refresh = useCallback(() => setAttempt((n) => n + 1), []);
-
-  // Catch up when the user comes back to the tab (an event, not polling).
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') refresh();
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [refresh]);
-
-  const applyMessage = useCallback(
-    (message: Message) => {
+  /** Shows `message` as the conversation's latest; counts it as unread when that applies. */
+  const showMessage = useCallback(
+    (message: Message, { countUnread }: { countUnread: boolean }) => {
       let known = true;
       setList((current) => {
         if (current.status !== 'ready') return current;
@@ -65,12 +94,27 @@ export function useConversationList(): ChatsContextValue {
           known = false;
           return current;
         }
+
+        const seen = counted.current.get(conversation.id) ?? new Set<string>();
+        const myLastRead = myMember(conversation, myUserId)?.lastReadAt ?? null;
+        const isUnread =
+          countUnread &&
+          message.senderId !== myUserId &&
+          !seen.has(message.id) &&
+          (myLastRead === null || message.createdAt > myLastRead) &&
+          active.current !== conversation.id;
+        if (isUnread) {
+          seen.add(message.id);
+          counted.current.set(conversation.id, seen);
+        }
+
         const isNewer = !conversation.lastMessage || compareMessages(conversation.lastMessage, message) < 0;
-        if (!isNewer) return current;
+        if (!isNewer && !isUnread) return current;
         const updated: Conversation = {
           ...conversation,
-          lastMessage: message,
+          lastMessage: isNewer ? message : conversation.lastMessage,
           updatedAt: message.createdAt > conversation.updatedAt ? message.createdAt : conversation.updatedAt,
+          unreadCount: isUnread ? conversation.unreadCount + 1 : conversation.unreadCount,
         };
         return {
           status: 'ready',
@@ -79,7 +123,35 @@ export function useConversationList(): ChatsContextValue {
       });
       if (!known) refresh();
     },
-    [refresh],
+    [myUserId, refresh],
+  );
+
+  const applyMessage = useCallback((message: Message) => showMessage(message, { countUnread: false }), [showMessage]);
+
+  const applyRead = useCallback(
+    (conversationId: string, lastReadAt: string) => {
+      let needsRefresh = false;
+      setList((current) => {
+        if (current.status !== 'ready') return current;
+        return {
+          status: 'ready',
+          conversations: current.conversations.map((conversation) => {
+            if (conversation.id !== conversationId) return conversation;
+            const members = conversation.members.map((m) =>
+              m.userId === myUserId && (!m.lastReadAt || m.lastReadAt < lastReadAt) ? { ...m, lastReadAt } : m,
+            );
+            const last = conversation.lastMessage;
+            const readEverything = !last || last.createdAt <= lastReadAt;
+            // Partially read: only the server can count what is left.
+            if (!readEverything) needsRefresh = true;
+            if (readEverything) counted.current.delete(conversationId);
+            return { ...conversation, members, unreadCount: readEverything ? 0 : conversation.unreadCount };
+          }),
+        };
+      });
+      if (needsRefresh) refresh();
+    },
+    [myUserId, refresh],
   );
 
   const upsertConversation = useCallback((conversation: Conversation) => {
@@ -90,7 +162,35 @@ export function useConversationList(): ChatsContextValue {
     });
   }, []);
 
-  return { list, refresh, applyMessage, upsertConversation };
+  const onChanged = useCallback(
+    (event: ConversationChangedEvent) => {
+      if (event.change !== 'removed') return refresh();
+      counted.current.delete(event.conversationId);
+      setList((current) =>
+        current.status === 'ready'
+          ? { status: 'ready', conversations: current.conversations.filter((c) => c.id !== event.conversationId) }
+          : current,
+      );
+    },
+    [refresh],
+  );
+
+  // One live subscription for the whole list.
+  useEffect(() => {
+    return subscribeToUser(myUserId, {
+      onActivity: (event: ConversationActivityEvent) => {
+        showMessage(event.lastMessage, { countUnread: true });
+        if (event.lastMessage.senderId !== myUserId) delivery.report(event.conversationId, event.lastMessage.createdAt);
+      },
+      onRead: (event) => applyRead(event.conversationId, event.lastReadAt),
+      onChanged,
+      onStatus: setListStatus,
+      // Events sent while disconnected are not replayed: start from the server again.
+      onJoined: refresh,
+    });
+  }, [myUserId, showMessage, applyRead, onChanged, refresh, delivery]);
+
+  return { list, listStatus, refresh, applyMessage, upsertConversation, applyRead, delivery };
 }
 
 export const ChatsContext = createContext<ChatsContextValue | null>(null);

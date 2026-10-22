@@ -25,6 +25,8 @@ conversations ─────────┘
 | `0002_conversations`      | generated | Enums, the six conversation tables, indexes, RLS and policies, username prefix index |
 | `0003_message_cursor_and_retries` | generated | `messages.created_at` to millisecond precision; `messages.client_id` and its unique index |
 | `0004_message_broadcast`  | custom    | `message.created` broadcast trigger; `private.can_access_conversation_topic()`; RLS policy on `realtime.messages` |
+| `0005_presence_and_markers` | generated | `profiles.last_seen_at`; read/delivery markers to millisecond precision |
+| `0006_live_state_events`  | custom    | Triggers for list, receipt and membership events; user and live channel helpers and policies |
 
 None are applied to a hosted database yet (no Supabase project).
 
@@ -51,6 +53,7 @@ database cannot disagree. Adding a value is an `ALTER TYPE ... ADD VALUE` migrat
 | `username`     | `text`        | Unique, lowercase, `^[a-z0-9_]{3,20}$` (CHECK)               |
 | `display_name` | `text`        | 1-50 characters, not blank (CHECK)                           |
 | `avatar_path`  | `text` null   | Storage path, filled in by the media phase                   |
+| `last_seen_at` | `timestamptz(3)` null | "Last seen": reported on start, every 5 min while visible, and on hide; at most one write per minute |
 | `created_at`, `updated_at` | `timestamptz` |                                                  |
 
 No email column: email stays in Supabase `auth.users`.
@@ -82,8 +85,8 @@ and the pair no longer blocks anything.
 | `user_id`           | `uuid`          | → `profiles`, `cascade`                            |
 | `role`              | `member_role`   | Default `member`                                   |
 | `joined_at`         | `timestamptz`   |                                                    |
-| `last_delivered_at` | `timestamptz` null | Per-member delivery marker (filled in Phase 5)  |
-| `last_read_at`      | `timestamptz` null | Per-member read marker (filled in Phase 5)      |
+| `last_delivered_at` | `timestamptz(3)` null | Newest message time this member's client received; only moves forward |
+| `last_read_at`      | `timestamptz(3)` null | Newest message time this member has read; only moves forward |
 
 - Primary key `(conversation_id, user_id)`: no duplicate membership.
 - `conversation_members_one_owner_idx`: partial unique index, at most one `owner` per conversation.
@@ -158,6 +161,49 @@ Primary key `(call_id, user_id)`. `call_id` → `calls` (`cascade`), `user_id` �
 (`cascade`). `joined_at` is null while the call rings for that person; `left_at` requires
 `joined_at` and must not be earlier.
 
+## Read, delivery and unread state (Phase 5)
+
+- **Markers, not receipt rows.** A message is delivered to / read by a member when its `created_at`
+  is at or before that member's `last_delivered_at` / `last_read_at`. There is no delivery or
+  receipt table. The client coalesces marker updates, and the database only writes when a marker
+  actually moves forward.
+- **Never backwards, never ahead.** Updates are conditioned on `last_x IS NULL OR last_x < new`, so
+  a stale value changes nothing (read answers 409, delivery skips it). A marker can never be set
+  past the conversation's newest message. Reading also raises `last_delivered_at` (`greatest`).
+- **Delivery batches** update up to 50 conversations in one statement (`CASE conversation_id`).
+- **Unread count** per conversation is computed inside the list query: a correlated
+  `count(*)` over `SELECT 1 FROM messages m WHERE m.conversation_id = cm.conversation_id AND
+  m.created_at > coalesce(cm.last_read_at, '-infinity') AND m.sender_id IS DISTINCT FROM
+  cm.user_id LIMIT 100`. It is an index range scan on `(conversation_id, created_at, id)` that stops
+  at 100. No counter table, so counts survive refreshes and cannot drift.
+- **Millisecond markers:** markers hold message `created_at` values (milliseconds since Phase 4),
+  so they compare exactly.
+
+## Realtime triggers (Phase 5)
+
+All publish with `realtime.send(payload, event, topic, private => true)` and catch their own errors
+(logged as `linka: broadcasting ... failed`), so a realtime failure never blocks the write. Payloads
+are built by `private.message_json()` and `private.iso()` to match the shared contracts exactly.
+
+| Trigger | When | Publishes |
+| ------- | ---- | --------- |
+| `messages_broadcast_created` (Phase 4) | after insert on `messages` | `message.created` on `conversation:<id>` |
+| `messages_broadcast_activity` | after insert on `messages` | `conversation.activity` on each member's `user:<id>` (at most 100) |
+| `conversation_members_broadcast_markers` | a member's markers actually changed | `receipt.updated` on `conversation:<id>`; `conversation.read` on that member's `user:<id>` |
+| `conversation_members_broadcast_added` / `_removed` | per statement (transition tables) | `conversation.changed` to each affected user; one `conversation.updated` per conversation |
+| `conversation_members_broadcast_role` | a role changed | `conversation.updated` |
+| `conversations_broadcast_renamed` | the name changed (not activity bumps) | `conversation.updated`; `conversation.changed` (updated) to each member |
+
+**Write cost.** `realtime.send()` stores each event in Supabase's `realtime.messages` log, which
+Supabase prunes after about 3 days. A new message therefore writes one row for the conversation
+channel plus one per member for the live list, bounded by the 100-member group limit. Application
+tables get no per-recipient writes. If this fan-out ever matters, it can move to a background worker
+without changing the client contract.
+
+**Lesson recorded in the triggers:** values computed in a plpgsql `DECLARE` run outside the
+function's `EXCEPTION` block. Every payload is therefore built inside the protected block, so even a
+broken payload cannot block a write.
+
 ## Indexes and why
 
 | Index                                   | Serves                                                    |
@@ -201,6 +247,14 @@ write any of these tables. All writes go through the API, which validates input 
 messages only when `private.can_access_conversation_topic((select realtime.topic()))` is true, i.e.
 the topic is exactly `conversation:<uuid>` and they are a member. Supabase uses this to authorize
 joining a private channel. No INSERT policy: browser clients cannot publish on these topics.
+
+**User and live channels (Phase 5).**
+
+- `linka_users_receive_own_events`: `SELECT` broadcast only on exactly `user:<auth.uid()>`
+  (`private.can_access_user_topic`). No INSERT: only the database publishes there.
+- `linka_conversation_members_receive_live` and `linka_conversation_members_publish_live`: `SELECT`
+  and `INSERT` for broadcast and presence on `live:<uuid>`, for members
+  (`private.can_access_live_topic`). This is the only topic browser clients may publish on.
 
 **The membership helper.** Policies call `private.is_conversation_member(conversation_id)`
 (migration `0001_rls_helpers`). A policy on `conversation_members` that queried

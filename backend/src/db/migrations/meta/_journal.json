@@ -36,6 +36,20 @@
       "when": 1792621718651,
       "tag": "0004_message_broadcast",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792626523924,
+      "tag": "0005_presence_and_markers",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792626529653,
+      "tag": "0006_live_state_events",
+      "breakpoints": true
     }
   ]
 }

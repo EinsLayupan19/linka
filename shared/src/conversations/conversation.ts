@@ -72,12 +72,19 @@ export const updateMemberRoleSchema = z.strictObject({
 
 export type UpdateMemberRoleInput = z.infer<typeof updateMemberRoleSchema>;
 
+/**
+ * A member as seen by fellow members. The markers drive read receipts; lastSeenAt drives
+ * "Last seen". Neither is ever shown outside the conversation (not in user search).
+ */
 export const conversationMemberSchema = userSummarySchema
   .omit({ id: true })
   .extend({
     userId: z.uuid(),
     role: memberRoleSchema,
     joinedAt: z.iso.datetime({ offset: true }),
+    lastDeliveredAt: z.iso.datetime().nullable(),
+    lastReadAt: z.iso.datetime().nullable(),
+    lastSeenAt: z.iso.datetime().nullable(),
   });
 
 export type ConversationMember = z.infer<typeof conversationMemberSchema>;
@@ -93,6 +100,11 @@ export const conversationSchema = z.object({
   members: z.array(conversationMemberSchema),
   /** The newest message, for list previews; null when there are none. */
   lastMessage: messageSchema.nullable(),
+  /**
+   * The caller's unread messages: other people's messages after the caller's lastReadAt,
+   * counted by the server, capped at UNREAD_COUNT_CAP.
+   */
+  unreadCount: z.number().int().min(0),
 });
 
 export type Conversation = z.infer<typeof conversationSchema>;

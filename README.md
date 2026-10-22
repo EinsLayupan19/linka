@@ -3,12 +3,14 @@
 A real-time messaging and calling platform: 1:1 and group chats, read/delivery states, presence,
 typing indicators, file sharing, and WebRTC voice/video calls.
 
-> Status: **Phase 4 (realtime messaging)**. See [docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md).
+> Status: **Phase 5 (read state, presence & typing)**. See [docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md).
 >
 > Built so far (tested locally; not yet verified against a hosted Supabase project): sign-up and
 > login, profiles, finding people by username, 1:1 conversations, sending text messages, live
-> delivery to the open conversation, and paging through history. Realtime uses Supabase Broadcast from Database on one private channel per
-> conversation ([details](docs/ARCHITECTURE.md#messaging-and-realtime-phase-4)).
+> delivery, paging through history, delivered/read receipts, unread counts, a live conversation
+> list, online/last seen, and typing indicators. Realtime uses Supabase Broadcast from Database and
+> Presence on private channels ([messaging](docs/ARCHITECTURE.md#messaging-and-realtime-phase-4),
+> [live state](docs/ARCHITECTURE.md#live-state-phase-5-receipts-unread-counts-live-list-presence-typing)).
 
 ## Tech stack
 

@@ -12,6 +12,7 @@ import { usersRouter } from './routes/users.js';
 import { createSupabaseTokenVerifier, type VerifyAccessToken } from './services/auth.js';
 import { createConversationStore, type ConversationStore } from './services/conversations.js';
 import { checkDatabase } from './services/health.js';
+import { createMarkerStore, type MarkerStore } from './services/markers.js';
 import { createMessageStore, type MessageStore } from './services/messages.js';
 import { createProfileStore, type ProfileStore } from './services/profiles.js';
 
@@ -23,6 +24,7 @@ export interface AppDependencies {
   profiles: ProfileStore | null;
   conversations: ConversationStore | null;
   messages: MessageStore | null;
+  markers: MarkerStore | null;
 }
 
 function defaultDependencies(): AppDependencies {
@@ -32,6 +34,7 @@ function defaultDependencies(): AppDependencies {
     profiles: db ? createProfileStore(db) : null,
     conversations: db ? createConversationStore(db) : null,
     messages: db ? createMessageStore(db) : null,
+    markers: db ? createMarkerStore(db) : null,
   };
 }
 

@@ -45,13 +45,20 @@ export interface FakeChannel {
   fail(status?: 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED'): void;
   /** Deliver a broadcast event to the channel's listeners. */
   emit(event: string, payload: unknown): void;
+  /** Replace the presence state and notify presence listeners (a Presence 'sync'). */
+  setPresence(state: Record<string, unknown[]>): void;
+  /** What this client tracked in Presence. */
+  tracked: unknown[];
+  /** Broadcasts this client sent. */
+  sent: { event: string; payload: unknown }[];
 }
 
 export const realtimeChannels: FakeChannel[] = [];
 
 function createFakeChannel(topic: string, options: unknown) {
-  const handlers: { event: string; handler: BroadcastHandler }[] = [];
+  const handlers: { type: string; event: string; handler: BroadcastHandler }[] = [];
   let onStatus: StatusCallback | undefined;
+  let presence: Record<string, unknown[]> = {};
 
   const fake: FakeChannel = {
     topic,
@@ -60,14 +67,29 @@ function createFakeChannel(topic: string, options: unknown) {
     join: () => onStatus?.('SUBSCRIBED'),
     fail: (status = 'CHANNEL_ERROR') => onStatus?.(status),
     emit: (event, payload) => {
-      for (const h of handlers) if (h.event === event) h.handler({ payload });
+      for (const h of handlers) if (h.type === 'broadcast' && h.event === event) h.handler({ payload });
     },
+    setPresence: (state) => {
+      presence = state;
+      for (const h of handlers) if (h.type === 'presence' && h.event === 'sync') h.handler({ payload: undefined });
+    },
+    tracked: [],
+    sent: [],
   };
 
   const channel = {
-    on: vi.fn((_type: string, filter: { event: string }, handler: BroadcastHandler) => {
-      handlers.push({ event: filter.event, handler });
+    on: vi.fn((type: string, filter: { event: string }, handler: BroadcastHandler) => {
+      handlers.push({ type, event: filter.event, handler });
       return channel;
+    }),
+    presenceState: () => presence,
+    track: vi.fn(async (state: unknown) => {
+      fake.tracked.push(state);
+      return 'ok';
+    }),
+    send: vi.fn(async (message: { event: string; payload: unknown }) => {
+      fake.sent.push({ event: message.event, payload: message.payload });
+      return 'ok';
     }),
     subscribe: vi.fn((callback: StatusCallback) => {
       onStatus = callback;

@@ -1,9 +1,20 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import type { Message } from '@linka/shared';
+import type { Message, ReceiptUpdatedEvent } from '@linka/shared';
 import { toApiError } from '../lib/api';
 import { listMessages, sendMessage } from '../services/messages';
 import { subscribeToConversation, type LiveStatus } from '../services/realtime';
 import { conversationMessagesReducer, initialMessagesState } from './conversationMessagesReducer';
+
+export interface ConversationMessagesOptions {
+  /** A message was sent or received (for the conversation list preview). */
+  onActivity?: (message: Message) => void;
+  /** Messages reached this client (history or realtime), for delivery receipts. */
+  onReceived?: (messages: Message[]) => void;
+  /** A member's read/delivery markers changed. */
+  onReceipt?: (event: ReceiptUpdatedEvent) => void;
+  /** Members, roles or the name changed. */
+  onConversationUpdated?: () => void;
+}
 
 /**
  * Everything the conversation view needs about messages:
@@ -15,16 +26,16 @@ import { conversationMessagesReducer, initialMessagesState } from './conversatio
  * - sending with a pending state, failure and retry; retries reuse the clientId so the
  *   server never stores a message twice
  */
-export function useConversationMessages(conversationId: string, onActivity?: (message: Message) => void) {
+export function useConversationMessages(conversationId: string, options: ConversationMessagesOptions = {}) {
   const [state, dispatch] = useReducer(conversationMessagesReducer, initialMessagesState);
   const [liveStatus, setLiveStatus] = useState<LiveStatus>('connecting');
   const [attempt, setAttempt] = useState(0);
 
   // Latest values for async callbacks, without re-subscribing when they change.
-  const onActivityRef = useRef(onActivity);
+  const optionsRef = useRef(options);
   const activeConversation = useRef(conversationId);
   useEffect(() => {
-    onActivityRef.current = onActivity;
+    optionsRef.current = options;
     activeConversation.current = conversationId;
   });
 
@@ -33,7 +44,10 @@ export function useConversationMessages(conversationId: string, onActivity?: (me
     dispatch({ type: 'reset' });
     const controller = new AbortController();
     listMessages(conversationId, { signal: controller.signal }).then(
-      (page) => dispatch({ type: 'loaded', page }),
+      (page) => {
+        dispatch({ type: 'loaded', page });
+        optionsRef.current.onReceived?.(page.messages);
+      },
       (error: unknown) => {
         if (!controller.signal.aborted) dispatch({ type: 'loadFailed', error: toApiError(error) });
       },
@@ -50,15 +64,21 @@ export function useConversationMessages(conversationId: string, onActivity?: (me
     const unsubscribe = subscribeToConversation(conversationId, {
       onMessage: (message) => {
         dispatch({ type: 'received', messages: [message] });
-        onActivityRef.current?.(message);
+        optionsRef.current.onActivity?.(message);
+        optionsRef.current.onReceived?.([message]);
       },
+      onReceipt: (event) => optionsRef.current.onReceipt?.(event),
+      onConversationUpdated: () => optionsRef.current.onConversationUpdated?.(),
       onStatus: setLiveStatus,
       onJoined: () => {
         refetch?.abort();
         const controller = new AbortController();
         refetch = controller;
         listMessages(conversationId, { signal: controller.signal }).then(
-          (page) => dispatch({ type: 'latestRefetched', page }),
+          (page) => {
+            dispatch({ type: 'latestRefetched', page });
+            optionsRef.current.onReceived?.(page.messages);
+          },
           // Best effort: the view keeps what it has and the next join tries again.
           () => undefined,
         );
@@ -77,7 +97,7 @@ export function useConversationMessages(conversationId: string, onActivity?: (me
       sendMessage(target, { content, clientId }).then(
         (message) => {
           if (activeConversation.current === target) dispatch({ type: 'received', messages: [message] });
-          onActivityRef.current?.(message);
+          optionsRef.current.onActivity?.(message);
         },
         (error: unknown) => {
           if (activeConversation.current === target) {

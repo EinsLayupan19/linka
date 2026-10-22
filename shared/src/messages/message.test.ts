@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { compareMessages, conversationTopic, messagePageQuerySchema } from './message.js';
+import { conversationTopic } from '../realtime/events.js';
+import { compareMessages, messagePageQuerySchema } from './message.js';
 
 describe('messagePageQuerySchema', () => {
   it('defaults to 50 and accepts a numeric string', () => {

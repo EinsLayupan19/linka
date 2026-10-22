@@ -1,6 +1,7 @@
 import { and, asc, eq, like, ne, sql } from 'drizzle-orm';
 import {
   ErrorCode,
+  LAST_SEEN_MIN_GAP_SECONDS,
   type CreateProfileInput,
   type Profile,
   type UpdateProfileInput,
@@ -16,6 +17,11 @@ export interface ProfileStore {
   findById(userId: string): Promise<Profile | null>;
   create(userId: string, input: CreateProfileInput): Promise<Profile>;
   update(userId: string, input: UpdateProfileInput): Promise<Profile | null>;
+  /**
+   * Records that the user is active (for "Last seen"). Throttled in the database: a report
+   * less than LAST_SEEN_MIN_GAP_SECONDS after the previous one does not write.
+   */
+  markSeen(userId: string): Promise<void>;
   /** Public summaries of users whose username starts with `prefix` (already lowercase). */
   searchByUsername(prefix: string, options: { excludeUserId: string; limit: number }): Promise<UserSummary[]>;
 }
@@ -79,6 +85,18 @@ export function createProfileStore(db: Database): ProfileStore {
         .where(eq(profiles.id, userId))
         .returning();
       return row ? toProfile(row) : null;
+    },
+
+    async markSeen(userId) {
+      await db
+        .update(profiles)
+        .set({ lastSeenAt: sql`now()` })
+        .where(
+          and(
+            eq(profiles.id, userId),
+            sql`(${profiles.lastSeenAt} is null or ${profiles.lastSeenAt} < now() - make_interval(secs => ${LAST_SEEN_MIN_GAP_SECONDS}))`,
+          ),
+        );
     },
 
     async searchByUsername(prefix, { excludeUserId, limit }) {

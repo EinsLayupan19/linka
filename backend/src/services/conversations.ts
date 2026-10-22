@@ -2,6 +2,7 @@ import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
 import {
   ErrorCode,
   GROUP_MAX_MEMBERS,
+  UNREAD_COUNT_CAP,
   type AddMembersInput,
   type Conversation,
   type ConversationMember,
@@ -53,9 +54,12 @@ export function createConversationStore(db: Database): ConversationStore {
               userId: conversationMembers.userId,
               role: conversationMembers.role,
               joinedAt: conversationMembers.joinedAt,
+              lastDeliveredAt: conversationMembers.lastDeliveredAt,
+              lastReadAt: conversationMembers.lastReadAt,
               username: profiles.username,
               displayName: profiles.displayName,
               avatarPath: profiles.avatarPath,
+              lastSeenAt: profiles.lastSeenAt,
             })
             .from(conversationMembers)
             .innerJoin(profiles, eq(profiles.id, conversationMembers.userId))
@@ -63,9 +67,15 @@ export function createConversationStore(db: Database): ConversationStore {
             .orderBy(asc(conversationMembers.joinedAt), asc(profiles.username));
 
     const byConversation = new Map<string, ConversationMember[]>();
-    for (const { conversationId, joinedAt, ...member } of rows) {
+    for (const { conversationId, joinedAt, lastDeliveredAt, lastReadAt, lastSeenAt, ...member } of rows) {
       const list = byConversation.get(conversationId) ?? [];
-      list.push({ ...member, joinedAt: joinedAt.toISOString() });
+      list.push({
+        ...member,
+        joinedAt: joinedAt.toISOString(),
+        lastDeliveredAt: lastDeliveredAt?.toISOString() ?? null,
+        lastReadAt: lastReadAt?.toISOString() ?? null,
+        lastSeenAt: lastSeenAt?.toISOString() ?? null,
+      });
       byConversation.set(conversationId, list);
     }
     return byConversation;
@@ -89,9 +99,41 @@ export function createConversationStore(db: Database): ConversationStore {
     return new Map(rows.map((row) => [row.latest.conversationId, toMessage(row.latest)]));
   }
 
-  async function loadDetails(rows: ConversationRow[]): Promise<Conversation[]> {
+  /**
+   * The caller's unread count per conversation: other people's messages after the caller's
+   * last_read_at, counted in the database (one query for all conversations, each count an
+   * index range scan on (conversation_id, created_at, id)) and capped at UNREAD_COUNT_CAP.
+   */
+  async function loadUnreadCounts(userId: string, conversationIds: string[]): Promise<Map<string, number>> {
+    if (conversationIds.length === 0) return new Map();
+    // Qualified on purpose: Drizzle leaves single-table column references unqualified, and
+    // inside the subquery an unqualified conversation_id would mean messages.conversation_id.
+    const me = sql.raw('"conversation_members"');
+    const rows = await db
+      .select({
+        conversationId: conversationMembers.conversationId,
+        unread: sql<number>`(
+          select count(*)::int from (
+            select 1 from ${messages} as m
+            where m.conversation_id = ${me}.conversation_id
+              and m.created_at > coalesce(${me}.last_read_at, '-infinity'::timestamptz)
+              and m.sender_id is distinct from ${me}.user_id
+            limit ${UNREAD_COUNT_CAP}
+          ) as unread
+        )`,
+      })
+      .from(conversationMembers)
+      .where(and(eq(conversationMembers.userId, userId), inArray(conversationMembers.conversationId, conversationIds)));
+    return new Map(rows.map((row) => [row.conversationId, Number(row.unread)]));
+  }
+
+  async function loadDetails(rows: ConversationRow[], userId: string): Promise<Conversation[]> {
     const ids = rows.map((row) => row.id);
-    const [members, lastMessages] = await Promise.all([loadMembers(ids), loadLastMessages(ids)]);
+    const [members, lastMessages, unread] = await Promise.all([
+      loadMembers(ids),
+      loadLastMessages(ids),
+      loadUnreadCounts(userId, ids),
+    ]);
     return rows.map((row) => ({
       id: row.id,
       type: row.type,
@@ -100,13 +142,15 @@ export function createConversationStore(db: Database): ConversationStore {
       updatedAt: row.updatedAt.toISOString(),
       members: members.get(row.id) ?? [],
       lastMessage: lastMessages.get(row.id) ?? null,
+      unreadCount: unread.get(row.id) ?? 0,
     }));
   }
 
-  async function load(conversationId: string): Promise<Conversation> {
+  /** A conversation as seen by the given user (their unread count). */
+  async function load(conversationId: string, userId: string): Promise<Conversation> {
     const [row] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
     if (!row) throw new Error(`Conversation ${conversationId} disappeared`);
-    const [conversation] = await loadDetails([row]);
+    const [conversation] = await loadDetails([row], userId);
     return conversation!;
   }
 
@@ -143,7 +187,7 @@ export function createConversationStore(db: Database): ConversationStore {
     await assertUsersExist([otherUserId], 'userId');
 
     const existing = await findDirect(userId, otherUserId);
-    if (existing) return { conversation: await load(existing.id), created: false };
+    if (existing) return { conversation: await load(existing.id, userId), created: false };
 
     try {
       const id = await db.transaction(async (tx) => {
@@ -158,12 +202,12 @@ export function createConversationStore(db: Database): ConversationStore {
         ]);
         return row.id;
       });
-      return { conversation: await load(id), created: true };
+      return { conversation: await load(id, userId), created: true };
     } catch (error) {
       // Both people started the conversation at the same moment: the unique pair wins once.
       if (postgresErrorCode(error) === UNIQUE_VIOLATION) {
         const winner = await findDirect(userId, otherUserId);
-        if (winner) return { conversation: await load(winner.id), created: false };
+        if (winner) return { conversation: await load(winner.id, userId), created: false };
       }
       throw error;
     }
@@ -191,7 +235,7 @@ export function createConversationStore(db: Database): ConversationStore {
       ]);
       return row.id;
     });
-    return { conversation: await load(id), created: true };
+    return { conversation: await load(id, userId), created: true };
   }
 
   async function requireGroupMember(conversationId: string, userId: string) {
@@ -220,12 +264,15 @@ export function createConversationStore(db: Database): ConversationStore {
         .orderBy(desc(conversations.updatedAt), desc(conversations.id))
         .limit(CONVERSATION_LIST_LIMIT);
 
-      return loadDetails(rows.map((r) => r.conversation));
+      return loadDetails(
+        rows.map((r) => r.conversation),
+        userId,
+      );
     },
 
     async getForUser(userId, conversationId) {
       await requireMembership(db, conversationId, userId);
-      return load(conversationId);
+      return load(conversationId, userId);
     },
 
     create(userId, input) {
@@ -239,7 +286,7 @@ export function createConversationStore(db: Database): ConversationStore {
       if (!canEditGroup(role)) throw forbidden('Only the owner and admins can change the group.');
 
       await db.update(conversations).set({ name: input.name }).where(eq(conversations.id, conversationId));
-      return load(conversationId);
+      return load(conversationId, userId);
     },
 
     async addMembers(userId, conversationId, input) {
@@ -275,7 +322,7 @@ export function createConversationStore(db: Database): ConversationStore {
         }
         throw error;
       }
-      return load(conversationId);
+      return load(conversationId, userId);
     },
 
     async updateMemberRole(userId, conversationId, targetUserId, role) {
@@ -284,7 +331,7 @@ export function createConversationStore(db: Database): ConversationStore {
         throw forbidden('Only the owner can change roles.');
       }
       const current = await targetRole(conversationId, targetUserId);
-      if (current === role) return load(conversationId);
+      if (current === role) return load(conversationId, userId);
 
       const memberRow = (id: string) =>
         and(eq(conversationMembers.conversationId, conversationId), eq(conversationMembers.userId, id));
@@ -298,7 +345,7 @@ export function createConversationStore(db: Database): ConversationStore {
       } else {
         await db.update(conversationMembers).set({ role }).where(memberRow(targetUserId));
       }
-      return load(conversationId);
+      return load(conversationId, userId);
     },
 
     async removeMember(userId, conversationId, targetUserId) {

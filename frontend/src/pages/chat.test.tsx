@@ -155,7 +155,8 @@ describe('conversation view', () => {
     backend({ conversationStatus: 404 });
     renderWithAuth(<App />, { path: `/conversations/${CONVERSATION_ID}` });
     expect(await screen.findByRole('heading', { name: 'Conversation not found' })).toBeInTheDocument();
-    expect(realtimeChannels).toHaveLength(0);
+    // Never tries to join the conversation's channels without access.
+    expect(realtimeChannels.filter((c) => !c.topic.startsWith('user:'))).toHaveLength(0);
   });
 });
 
@@ -185,7 +186,7 @@ describe('sending', () => {
     expect(await screen.findByText('Sending…')).toBeInTheDocument();
 
     const api = (globalThis.fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
-    const post = api.find(([, init]) => init?.method === 'POST')!;
+    const post = api.find(([url, init]) => init?.method === 'POST' && String(url).endsWith(messagesPath))!;
     await act(async () => confirm(jsonResponse(sentMessage({ body: JSON.parse(String(post[1].body)) } as ApiCall), 201)));
     await waitFor(() => expect(screen.queryByText('Sending…')).not.toBeInTheDocument());
     expect(within(messageLog()).getByText('Pending one')).toBeInTheDocument();
@@ -235,13 +236,17 @@ describe('sending', () => {
 });
 
 describe('realtime', () => {
-  it('subscribes to this conversation only, after the history loaded, and leaves on navigation', async () => {
+  it('uses one user channel plus this conversation’s two channels, and leaves the conversation’s on navigation', async () => {
     await openConversation();
     await joinRealtime();
 
-    expect(realtimeChannels.map((c) => c.topic)).toEqual([topic]);
+    expect(realtimeChannels.map((c) => c.topic).sort()).toEqual(
+      [`user:${TEST_USER_ID}`, topic, `live:${CONVERSATION_ID}`].sort(),
+    );
     fireEvent.click(screen.getByRole('link', { name: 'Chats' }));
     await waitFor(() => expect(latestChannel(topic).removed).toBe(true));
+    expect(latestChannel(`live:${CONVERSATION_ID}`).removed).toBe(true);
+    expect(latestChannel(`user:${TEST_USER_ID}`).removed).toBe(false);
   });
 
   it('shows new messages as they arrive, once each', async () => {

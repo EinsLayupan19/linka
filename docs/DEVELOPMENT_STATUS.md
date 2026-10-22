@@ -5,8 +5,8 @@
 | 1     | Foundation                             | Complete    |
 | 2     | Authentication & user foundation       | Complete    |
 | 3     | Database & conversation foundation     | Complete    |
-| 4     | Realtime messaging                     | In review   |
-| 5     | Read, delivery, presence & typing      | Not started |
+| 4     | Realtime messaging                     | Complete    |
+| 5     | Read, delivery, presence & typing      | In review   |
 | 6     | Media & file sharing                   | Not started |
 | 7     | Voice calls                            | Not started |
 | 8     | Video calls                            | Not started |
@@ -101,6 +101,37 @@ Not verifiable until a Supabase project exists:
 - Hosted enforcement of the `realtime.messages` policy with "private channels only" enabled
 - The chat UI in a real browser (it sits behind sign-in); it was exercised through component tests
 
+## Phase 5: Read, delivery, presence & typing
+
+Done:
+
+- Delivery and read markers on `conversation_members` (no receipt rows): batched
+  `POST /api/conversations/delivered`, `PUT /api/conversations/:id/read`; never backwards, never
+  past the newest message, always the caller's own row
+- Read receipts: Sent / Delivered / Read (1:1), Read by N (groups), live via `receipt.updated`
+- Server-authoritative unread counts in the conversation list (capped at 100), live adjustments
+- Live conversation list over one private `user:<id>` channel (activity, read, added/removed/updated)
+- Presence (Realtime Presence on `live:<id>`, nothing stored) and "Last seen"
+  (`profiles.last_seen_at`, at most one write per minute)
+- Typing indicators (Broadcast on `live:<id>`, throttled to 2 s, expire after 3 s, never stored)
+- Migrations `0005` (last seen, millisecond markers) and `0006` (event triggers, user and live channel
+  policies); see [DATABASE.md](DATABASE.md) and [ARCHITECTURE.md](ARCHITECTURE.md#live-state-phase-5-receipts-unread-counts-live-list-presence-typing)
+- Tests: markers (auth, membership, backwards, ahead, malformed, other members), unread counts,
+  last seen, triggers and payloads, user/live/conversation channel authorization, failure safety;
+  client receipts, delivery batching, read tracking, live list (dedupe, own messages, read, removal,
+  reconnect), presence, typing (throttle, expiry, several people, disconnect, leaving)
+
+Not in this phase (by design): attachments, avatars, calls, push notifications, editing/deleting
+messages, reactions, search beyond usernames, privacy settings for receipts or last seen.
+
+Not verifiable until a Supabase project exists:
+
+- Real Presence (sync, join/leave across browsers) and client broadcasts on `live:<id>`
+- The `user:<id>` channel and all Phase 5 triggers on hosted Supabase
+- Hosted enforcement of the new `realtime.messages` policies
+- The chat UI in a real browser, including desktop, mobile and narrow layouts (behind sign-in;
+  exercised through component tests only)
+
 ### Supabase setup (dashboard)
 
 1. **Create the project** (hosted). Then copy:
@@ -125,6 +156,9 @@ Not verifiable until a Supabase project exists:
 9. **Check realtime delivery** after applying the migrations: open the same conversation in two
    browsers signed in as two members; a message sent in one should appear in the other without a
    reload. If it does not, check *Database > Logs* for `linka: broadcasting message ... failed`.
+   For Phase 5, in the same two browsers check: the receiver's list shows the unread badge and new
+   preview without a reload; the sender sees "Delivered" and then "Read" after the receiver opens
+   the conversation; "Online" while both have it open; "typing…" while one types.
 
 Supabase's built-in email service is heavily rate limited and meant for testing; configure custom
 SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
@@ -161,6 +195,17 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
 | Pagination cursor | Opaque base64url of `[createdAt, id]`; default 50, max 100 per page |
 | Reconnect | Refetch the newest page on every join and merge by id; restart from it if it does not connect |
 | Conversation order | By last activity (`updated_at`, bumped by each new message) |
+| Read/delivery state | Two markers per member; client-coalesced; never backwards; never past the newest message |
+| Delivery trigger | Any receipt of someone else's message by the client (list, user channel, history, realtime) |
+| Read trigger | Conversation open, tab visible, newest messages in view |
+| Receipts | 1:1 Sent/Delivered/Read; groups "Read by N" (count only); members' markers visible to fellow members |
+| Unread counts | Server-computed per conversation, capped at 100; live adjustments idempotent per message id |
+| Live list | One `user:<id>` channel per signed-in user (only that user may join) |
+| Channels per user | At most 3: user, plus the open conversation's server channel and live channel |
+| Typing/presence channel | Separate member-writable `live:<id>`, so server events cannot be forged |
+| Presence scope | The open conversation only; no global directory |
+| Last seen | `profiles.last_seen_at`; on start, every 5 min while visible, on hide; at most 1 write/min; fellow members only |
+| Typing | Throttle 2 s, expiry 3 s, never stored |
 | Enums | Postgres enums built from the shared Zod value lists |
 | Realtime messaging | Postgres Changes vs Broadcast tradeoff presented before Phase 4 |
 | TURN | Documented limitation in Phase 7; hosted provider only when needed |
@@ -172,11 +217,17 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
   run an esbuild dev server, so the advisory does not apply. `npm audit fix --force` would downgrade
   drizzle-kit to 0.18, so it is intentionally not applied.
 - TypeScript is pinned to 6.0.x because typescript-eslint does not support TypeScript 7 yet.
-- The frontend bundle is ~620 kB (177 kB gzipped), mostly React and supabase-js; Vite warns above
+- The frontend bundle is ~632 kB (180 kB gzipped), mostly React and supabase-js; Vite warns above
   500 kB. Code splitting is part of the Phase 9 performance audit.
-- Only the open conversation streams live. The conversation list catches up when the browser tab
-  becomes visible again; a per-user channel for live list updates and unread counts belongs to
-  Phase 5.
+- "Online" means the person has the same conversation open (Presence on that conversation's live
+  channel). Otherwise the header shows "Last seen", which can lag by up to about 5 minutes.
+- Supabase does not attest who sent a client broadcast or presence entry: a member could make
+  another member appear typing or online in their shared conversation. Outsiders cannot, and no
+  stored data is affected. Messages, receipts and list events are database-published and cannot be
+  forged this way.
+- Each new message writes one row to Supabase's `realtime.messages` log per member (for the live
+  list), bounded by the 100-member group limit and pruned by Supabase after about 3 days.
+- Unread counts above 100 show as "99+" (counting stops at 100 on purpose).
 - The composer grows with its text in browsers that support `field-sizing: content`; elsewhere it
   stays one line tall and scrolls.
 - Access tokens stay valid until they expire (default 1 hour) even after logout; logout revokes the

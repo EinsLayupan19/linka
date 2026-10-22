@@ -3,6 +3,7 @@ import type { Conversation } from '@linka/shared';
 import { useChats } from '../../hooks/useChats';
 import { useProfile } from '../../hooks/useProfile';
 import { conversationTitle } from '../../utils/conversation';
+import { unreadBadge } from '../../utils/receipts';
 import { formatListTimestamp } from '../../utils/time';
 import { Avatar } from '../ui/Avatar';
 import { Button, secondaryButtonClassName } from '../ui/Button';
@@ -17,6 +18,7 @@ function preview(conversation: Conversation, myUserId: string): string {
 function ConversationRow({ conversation, myUserId }: { conversation: Conversation; myUserId: string }) {
   const title = conversationTitle(conversation, myUserId);
   const last = conversation.lastMessage;
+  const unread = conversation.unreadCount;
   return (
     <li>
       <NavLink
@@ -29,14 +31,24 @@ function ConversationRow({ conversation, myUserId }: { conversation: Conversatio
         <Avatar name={title} />
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline justify-between gap-2">
-            <span className="truncate font-medium">{title}</span>
+            <span className={`truncate ${unread > 0 ? 'font-semibold' : 'font-medium'}`}>{title}</span>
             {last && (
               <time dateTime={last.createdAt} className="shrink-0 text-xs text-ink-muted">
                 {formatListTimestamp(last.createdAt)}
               </time>
             )}
           </span>
-          <span className="block truncate text-sm text-ink-muted">{preview(conversation, myUserId)}</span>
+          <span className="flex items-center justify-between gap-2">
+            <span className={`block truncate text-sm ${unread > 0 ? 'text-ink' : 'text-ink-muted'}`}>
+              {preview(conversation, myUserId)}
+            </span>
+            {unread > 0 && (
+              <span className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-accent px-1.5 text-xs font-semibold text-on-accent">
+                <span aria-hidden="true">{unreadBadge(unread)}</span>
+                <span className="sr-only">{unread > 99 ? 'More than 99' : unread} unread</span>
+              </span>
+            )}
+          </span>
         </span>
       </NavLink>
     </li>
@@ -60,13 +72,20 @@ function ListSkeleton() {
 }
 
 export function ConversationList() {
-  const { list, refresh } = useChats();
+  const { list, listStatus, refresh } = useChats();
   const { profile } = useProfile();
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
-        <h1 className="text-lg font-semibold tracking-tight">Chats</h1>
+        <div className="min-w-0">
+          <h1 className="text-lg font-semibold tracking-tight">Chats</h1>
+          {listStatus === 'reconnecting' && (
+            <p role="status" className="text-xs text-warning">
+              Reconnecting…
+            </p>
+          )}
+        </div>
         <Link to="/conversations/new" className={`${secondaryButtonClassName} h-9 px-3`}>
           New chat
         </Link>

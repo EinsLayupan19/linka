@@ -223,9 +223,7 @@ Realtime), and channel access that is cached per connection (below).
   the first) the newest page is refetched and merged by id. If that page does not overlap what is
   shown (more than a page was missed), the view restarts from the newest page instead of showing a
   gap; older messages remain reachable with "Load earlier messages".
-- **Conversation list:** updated from what this tab sees (its own sends and the open conversation's
-  live messages) and refreshed when the browser tab becomes visible again. Other conversations do
-  not stream live yet.
+- **Conversation list:** live since Phase 5, through the user channel (below).
 
 ### Message pagination
 
@@ -240,6 +238,132 @@ Realtime), and channel access that is cached per connection (below).
   matches the stored value exactly; with microseconds, a cursor could repeat or skip messages
   created within the same millisecond.
 - A cursor only positions within a conversation the caller may read: membership is checked first.
+
+## Live state (Phase 5): receipts, unread counts, live list, presence, typing
+
+### Channels
+
+At most **three channels per signed-in user**, whatever the number of conversations:
+
+| Topic                | Lifetime                    | Who joins          | Who publishes | Events |
+| -------------------- | --------------------------- | ------------------ | ------------- | ------ |
+| `user:<userId>`      | While the chat screen is open | **that user only** | database only | `conversation.activity`, `conversation.read`, `conversation.changed` |
+| `conversation:<id>`  | While that conversation is open | members        | database only | `message.created`, `receipt.updated`, `conversation.updated` |
+| `live:<id>`          | While that conversation is open | members        | members       | Presence, `typing` |
+
+Every payload has a Zod contract in `@linka/shared` (`realtime/events.ts`) and is validated by the
+client before use; invalid events are dropped.
+
+**Why the open conversation has two channels.** Supabase authorizes *publishing* when a client joins
+a channel (cached for the connection), not per event. If members could publish on
+`conversation:<id>`, a member could inject a forged `message.created` or `receipt.updated` that
+others would display. So server events stay on a database-only channel, and only the ephemeral,
+low-stakes events (typing, presence) use the member-writable `live:<id>`.
+
+### Realtime authorization
+
+Policies on `realtime.messages` (migration `0006_live_state_events`), all for `authenticated`:
+
+- `user:<id>`: `SELECT` (broadcast) only when the topic equals `'user:' || auth.uid()` exactly
+  (`private.can_access_user_topic`). There is no pattern that admits other users, and no INSERT.
+- `live:<id>`: `SELECT` and `INSERT` for broadcast and presence when the topic is exactly
+  `live:<uuid>` and the user is a member (`private.can_access_live_topic`). This is the only topic
+  clients may publish on.
+- `conversation:<id>`: unchanged from Phase 4 (members receive broadcasts; nobody publishes;
+  presence is not allowed there).
+
+The client joins `live:<id>` only after the conversation loaded (membership confirmed), so it never
+probes channels it may not join.
+
+**Known limitation.** Supabase does not attest who sent a client broadcast or presence entry. A
+*member* of a conversation could make another *member* appear to be typing or online in that
+conversation. Outsiders cannot (they cannot join), payloads must name a current member, and neither
+feature touches stored data. Message content, receipts and list events cannot be forged this way
+because they are database-only.
+
+### Read and delivery markers
+
+- Two timestamps per member (`conversation_members.last_delivered_at`, `last_read_at`); never a row
+  per message or per receipt. A message is delivered to / read by a member when its `created_at`
+  is at or before that member's marker.
+- **Delivered:** the client reports the newest message from someone else that it received through
+  the conversation list, the user channel, a history page or `message.created`. Reports are
+  coalesced by `createDeliveryReporter` (1.5 s window, newest time per conversation, nothing at or
+  before what the server already has) into `POST /api/conversations/delivered` (up to 50
+  conversations per request). Stale values are skipped server-side; markers never move backwards.
+- **Read:** `useReadTracking` advances the marker when the conversation is open, the tab is visible
+  and the newest messages are scrolled into view, and only when someone else's message is newer
+  than the marker. One debounced request (`PUT /api/conversations/:id/read`); a backwards move is
+  rejected with 409 `MARKER_BEHIND` (e.g. a stale tab) and treated as done. Reading also raises
+  delivery.
+- **Validation:** a marker can never be set later than the conversation's newest message, so nobody
+  can mark future messages as read in advance. There is no `userId` anywhere in these requests: the
+  marker updated is always the caller's own row.
+
+**API (Phase 5).**
+
+| Method | Path                                   | Body                                        | Result |
+| ------ | -------------------------------------- | ------------------------------------------- | ------ |
+| PUT    | `/api/conversations/:id/read`          | `{ lastReadAt }`                            | 200 markers; 409 `MARKER_BEHIND`; 400 ahead/invalid; 404 non-member |
+| POST   | `/api/conversations/delivered`         | `{ conversations: [{ conversationId, lastDeliveredAt }] }` (1-50) | 200 `{ updated }`; 404 if any is not the caller's |
+| POST   | `/api/users/me/seen`                   |                                             | 204 (throttled to once a minute) |
+
+### Read receipts
+
+Derived on the client from the other members' markers (`utils/receipts.ts`), shown under my newest
+message only:
+
+- 1:1: `Sent` -> `Delivered` (their delivery marker reached it) -> `Read` (their read marker did).
+- Groups: `Read by N` (how many, not who), otherwise `Delivered` / `Sent`.
+
+Members' markers come with the conversation (`members[].lastDeliveredAt/lastReadAt`, visible to
+fellow members only, as RLS already allows) and update live from `receipt.updated`.
+
+### Unread counts
+
+- Server-authoritative: `unreadCount` on every conversation = other people's messages with
+  `created_at > my last_read_at` (`sender_id is distinct from me`), counted in the same request for
+  all listed conversations (one query; each count an index range scan on
+  `(conversation_id, created_at, id)`) and capped at 100 ("99+"). No counter table.
+- Live adjustments: `conversation.activity` from someone else adds 1, once per message id, and not
+  for the conversation currently open; `conversation.read` resets to 0 when everything is read (or
+  refetches for a partial read). Every (re)join of the user channel refetches the list, so live
+  adjustments can never drift for long.
+
+### Live conversation list
+
+`useConversationList` subscribes to `user:<me>` once and applies `conversation.activity` (preview,
+order by activity, unread), `conversation.read` and `conversation.changed` (`added`/`updated`:
+refetch; `removed`: drop it). The database publishes these from triggers (fan-out to each member's
+user channel, bounded by the 100-member group limit), so the API stays the only write path.
+
+### Presence and last seen
+
+- **Online** is Realtime Presence on `live:<id>`: each client tracks `{ userId }` while it has that
+  conversation open; nothing is written to PostgreSQL. In a 1:1 header the other person shows as
+  **Online** when they have this conversation open; groups show "N online". Presence is scoped to
+  the conversation, not a global directory: you only ever see presence of members of the
+  conversation you are viewing.
+- **Last seen** (`profiles.last_seen_at`) is durable but low-write: the client reports activity on
+  start, every 5 minutes while the tab is visible, and when the tab is hidden (with `keepalive`); the
+  server ignores reports less than 60 seconds apart. Fellow members see it in conversation details
+  ("Last seen 5 min ago"); it is not in user search. It is not updated continuously because it does
+  not need to be precise and must not become a write-per-heartbeat workload.
+
+### Typing
+
+- Broadcast on `live:<id>`, never stored. `notifyTyping` sends `typing: true` at most every 2 s
+  while keys are pressed, and `typing: false` after 3 s idle, on send, and on leaving.
+- Receivers show "Jonas is typing…", "Jonas and Maria are typing…" or "3 people are typing…";
+  each entry expires 3 s after its last event, and everything clears when the connection drops or
+  the conversation closes. Events from yourself, non-members or other conversations are ignored.
+
+### Reconnects
+
+All three channels report `connecting` / `live` / `reconnecting` and rejoin on their own
+(supabase-js). After every join: the user channel refetches the conversation list, the conversation
+channel refetches the newest messages (Phase 4), and the live channel re-tracks presence. Typing and
+presence clear while disconnected rather than showing stale state.
 
 **Errors.** Throw `AppError(status, code, message)` for errors the client may see. Anything else
 becomes a generic `500 INTERNAL_ERROR`; the details are logged on the server only. All errors use the

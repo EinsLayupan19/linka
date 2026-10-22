@@ -67,7 +67,8 @@ export async function apiRequest<T>(path: string, schema: z.ZodType<T>, options:
     throw new ApiError(0, ClientErrorCode.Network, 'Could not reach the server. Check your connection and try again.');
   }
 
-  const body: unknown = await response.json().catch(() => null);
+  // 204 No Content has no body to read.
+  const body: unknown = response.status === 204 ? undefined : await response.json().catch(() => null);
 
   if (!response.ok) {
     const parsed = apiErrorResponseSchema.safeParse(body);

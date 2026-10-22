@@ -5,7 +5,16 @@ import { Button } from '../ui/Button';
 const SHOW_COUNTER_FROM = MESSAGE_MAX_LENGTH - 500;
 
 /** Message input. Enter sends, Shift+Enter adds a line. Text is sent exactly as typed. */
-export function Composer({ onSend, disabled = false }: { onSend: (content: string) => void; disabled?: boolean }) {
+export function Composer({
+  onSend,
+  onTyping,
+  disabled = false,
+}: {
+  onSend: (content: string) => void;
+  /** Called as the user types (the caller throttles what it broadcasts). */
+  onTyping?: () => void;
+  disabled?: boolean;
+}) {
   const [content, setContent] = useState('');
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -58,6 +67,7 @@ export function Composer({ onSend, disabled = false }: { onSend: (content: strin
           onChange={(e) => {
             setContent(e.target.value);
             if (error) setError(null);
+            if (e.target.value.trim()) onTyping?.();
           }}
           onKeyDown={onKeyDown}
           className={

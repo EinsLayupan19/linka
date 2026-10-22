@@ -45,6 +45,12 @@ export function usersRouter(deps: {
     res.json({ users });
   });
 
+  // Activity report for "Last seen" (throttled by the server; see markSeen).
+  router.post('/me/seen', async (req, res) => {
+    await profiles().markSeen(authUser(req).userId);
+    res.status(204).end();
+  });
+
   router.get('/me', async (req, res) => {
     const profile = await profiles().findById(authUser(req).userId);
     if (!profile) throw new AppError(404, ErrorCode.ProfileNotFound, 'You have not set up your profile yet.');

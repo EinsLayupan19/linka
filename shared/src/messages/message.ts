@@ -74,11 +74,6 @@ export const messagePageSchema = z.object({
 
 export type MessagePage = z.infer<typeof messagePageSchema>;
 
-/** Realtime: one private Broadcast channel per conversation. */
-export const conversationTopic = (conversationId: string) => `conversation:${conversationId}`;
-/** Realtime event sent (from the database) when a message is stored. Its payload is a Message. */
-export const MESSAGE_CREATED_EVENT = 'message.created';
-
 /** Messages are ordered by (createdAt, id); the id breaks ties between identical timestamps. */
 export function compareMessages(a: Pick<Message, 'createdAt' | 'id'>, b: Pick<Message, 'createdAt' | 'id'>): number {
   if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;

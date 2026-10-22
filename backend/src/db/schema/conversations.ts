@@ -66,8 +66,8 @@ export const conversationMembers = pgTable(
       .references(() => profiles.id, { onDelete: 'cascade' }),
     role: memberRole('role').notNull().default('member'),
     joinedAt: timestamp('joined_at', { withTimezone: true }).notNull().defaultNow(),
-    lastDeliveredAt: timestamp('last_delivered_at', { withTimezone: true }),
-    lastReadAt: timestamp('last_read_at', { withTimezone: true }),
+    lastDeliveredAt: timestamp('last_delivered_at', { withTimezone: true, precision: 3 }),
+    lastReadAt: timestamp('last_read_at', { withTimezone: true, precision: 3 }),
   },
   (table) => [
     primaryKey({ name: 'conversation_members_pkey', columns: [table.conversationId, table.userId] }),

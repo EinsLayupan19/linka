@@ -59,6 +59,14 @@ export const userSummarySchema = profileSchema.pick({
 
 export type UserSummary = z.infer<typeof userSummarySchema>;
 
+/**
+ * "Last seen" is reported by the client on app start, when the tab is hidden, and at this
+ * interval while visible. The server ignores reports less than LAST_SEEN_MIN_GAP_SECONDS apart,
+ * so last_seen_at can never become a high-write workload.
+ */
+export const LAST_SEEN_REPORT_INTERVAL_MS = 5 * 60_000;
+export const LAST_SEEN_MIN_GAP_SECONDS = 60;
+
 export const USER_SEARCH_MIN_LENGTH = 2;
 export const USER_SEARCH_LIMIT = 20;
 

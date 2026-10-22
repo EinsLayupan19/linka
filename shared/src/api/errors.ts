@@ -33,6 +33,8 @@ export const ErrorCode = {
   /** The owner must transfer ownership before leaving. */
   OwnerCannotLeave: 'OWNER_CANNOT_LEAVE',
   CallInProgress: 'CALL_IN_PROGRESS',
+  /** A read marker update would move it backwards (e.g. a stale tab); nothing changed. */
+  MarkerBehind: 'MARKER_BEHIND',
   PayloadTooLarge: 'PAYLOAD_TOO_LARGE',
   ServiceUnavailable: 'SERVICE_UNAVAILABLE',
   Internal: 'INTERNAL_ERROR',

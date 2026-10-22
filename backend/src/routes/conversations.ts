@@ -5,6 +5,8 @@ import {
   createConversationSchema,
   createMessageSchema,
   ErrorCode,
+  markDeliveredSchema,
+  markReadSchema,
   messagePageQuerySchema,
   updateConversationSchema,
   updateMemberRoleSchema,
@@ -12,6 +14,7 @@ import {
 import { authUser, requireAuth } from '../middleware/requireAuth.js';
 import type { VerifyAccessToken } from '../services/auth.js';
 import type { ConversationStore } from '../services/conversations.js';
+import type { MarkerStore } from '../services/markers.js';
 import type { MessageStore } from '../services/messages.js';
 import { conversationNotFound } from '../services/membership.js';
 import { AppError } from '../utils/AppError.js';
@@ -27,6 +30,7 @@ export function conversationsRouter(deps: {
   verifyAccessToken: VerifyAccessToken | null;
   conversations: ConversationStore | null;
   messages: MessageStore | null;
+  markers: MarkerStore | null;
 }): Router {
   const router = Router();
 
@@ -47,6 +51,11 @@ export function conversationsRouter(deps: {
   function messageStore(): MessageStore {
     if (!deps.messages) throw databaseUnavailable();
     return deps.messages;
+  }
+
+  function markerStore(): MarkerStore {
+    if (!deps.markers) throw databaseUnavailable();
+    return deps.markers;
   }
 
   // A malformed id can never match a conversation: answer like any unknown conversation.
@@ -71,6 +80,12 @@ export function conversationsRouter(deps: {
     const { conversation, created } = await store().create(authUser(req).userId, input);
     // 200 with the existing conversation when a 1:1 conversation already exists.
     res.status(created ? 201 : 200).json(conversation);
+  });
+
+  // Delivery receipts for several conversations at once (the caller's own markers only).
+  router.post('/delivered', async (req, res) => {
+    const input = parseBody(markDeliveredSchema, req.body);
+    res.json(await markerStore().markDelivered(authUser(req).userId, input));
   });
 
   router.get('/:conversationId', async (req, res) => {
@@ -108,6 +123,13 @@ export function conversationsRouter(deps: {
     const id = conversationId(req.params.conversationId);
     const { message, created } = await messageStore().create(authUser(req).userId, id, input);
     res.status(created ? 201 : 200).json(message);
+  });
+
+  // The caller's read marker. There is no :userId: nobody can move someone else's marker.
+  router.put('/:conversationId/read', async (req, res) => {
+    const input = parseBody(markReadSchema, req.body);
+    const id = conversationId(req.params.conversationId);
+    res.json(await markerStore().markRead(authUser(req).userId, id, input));
   });
 
   // Remove a member, or leave the group when :userId is yourself.

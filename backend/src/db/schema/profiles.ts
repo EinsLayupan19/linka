@@ -19,6 +19,12 @@ export const profiles = pgTable(
     displayName: text('display_name').notNull(),
     /** Storage path of the avatar image (uploads arrive in the media phase). */
     avatarPath: text('avatar_path'),
+    /**
+     * When the user was last active, for "Last seen". Not a presence heartbeat: the client
+     * reports it on app start, when the tab is hidden and every few minutes while visible,
+     * and the server ignores reports less than a minute apart. Shown only to fellow members.
+     */
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true, precision: 3 }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()

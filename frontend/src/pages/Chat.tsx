@@ -1,17 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router';
-import type { Conversation } from '@linka/shared';
+import type { Conversation, Message, ReceiptUpdatedEvent } from '@linka/shared';
 import { Composer } from '../components/chat/Composer';
 import { LiveStatusNotice } from '../components/chat/LiveStatusNotice';
 import { MessageList } from '../components/chat/MessageList';
+import { TypingIndicator } from '../components/chat/TypingIndicator';
 import { Avatar } from '../components/ui/Avatar';
 import { Button } from '../components/ui/Button';
 import { useChats } from '../hooks/useChats';
 import { useConversationMessages } from '../hooks/useConversationMessages';
+import { useLiveConversation } from '../hooks/useLiveConversation';
 import { useProfile } from '../hooks/useProfile';
+import { useReadTracking } from '../hooks/useReadTracking';
 import { toApiError, type ApiError } from '../lib/api';
 import { getConversation } from '../services/conversations';
 import { conversationTitle, otherMember } from '../utils/conversation';
+import { receiptLabel, withMarkers } from '../utils/receipts';
+import { formatLastSeen } from '../utils/time';
 
 const backLinkClassName =
   'rounded-lg px-1 text-sm font-medium text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent md:hidden';
@@ -29,12 +34,13 @@ export function Chat() {
 
 function ConversationScreen({ conversationId }: { conversationId: string }) {
   const { profile } = useProfile();
-  const { list, applyMessage } = useChats();
-  const messages = useConversationMessages(conversationId, applyMessage);
+  const { list, applyMessage, applyRead, delivery } = useChats();
 
-  // Header details: shown from the list right away if known, then fetched fresh.
+  // Header details: shown from the list right away if known, then fetched fresh, and fetched
+  // again whenever the conversation changes (members, roles, name).
   const fromList = list.status === 'ready' ? list.conversations.find((c) => c.id === conversationId) : undefined;
   const [details, setDetails] = useState<DetailsState>({ status: 'loading' });
+  const [detailsAttempt, setDetailsAttempt] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     getConversation(conversationId, controller.signal).then(
@@ -44,14 +50,55 @@ function ConversationScreen({ conversationId }: { conversationId: string }) {
       },
     );
     return () => controller.abort();
-  }, [conversationId]);
+  }, [conversationId, detailsAttempt]);
+
+  const updateMembers = useCallback((event: Pick<ReceiptUpdatedEvent, 'userId' | 'lastDeliveredAt' | 'lastReadAt'>) => {
+    setDetails((current) =>
+      current.status === 'ready'
+        ? { status: 'ready', conversation: { ...current.conversation, members: withMarkers(current.conversation.members, event) } }
+        : current,
+    );
+  }, []);
+
+  const onReceived = useCallback(
+    (received: Message[]) => {
+      // Delivery receipt for the newest message from someone else.
+      const newest = received.reduce<string | null>(
+        (max, m) => (m.senderId !== profile.id && (!max || m.createdAt > max) ? m.createdAt : max),
+        null,
+      );
+      if (newest) delivery.report(conversationId, newest);
+    },
+    [conversationId, delivery, profile.id],
+  );
+
+  const messages = useConversationMessages(conversationId, {
+    onActivity: applyMessage,
+    onReceived,
+    onReceipt: updateMembers,
+    onConversationUpdated: () => setDetailsAttempt((n) => n + 1),
+  });
 
   const conversation = details.status === 'ready' ? details.conversation : fromList;
+  const me = conversation?.members.find((m) => m.userId === profile.id);
+  const memberIds = useMemo(() => new Set(conversation?.members.map((m) => m.userId) ?? []), [conversation]);
+  const live = useLiveConversation(conversationId, profile.id, memberIds, messages.state.status === 'ready');
+
+  const [atBottom, setAtBottom] = useState(true);
+  useReadTracking({
+    conversationId,
+    messages: messages.state.messages,
+    myUserId: profile.id,
+    myLastReadAt: me?.lastReadAt ?? null,
+    atBottom,
+    onRead: (lastReadAt) => {
+      applyRead(conversationId, lastReadAt);
+      updateMembers({ userId: profile.id, lastDeliveredAt: lastReadAt, lastReadAt });
+    },
+  });
+
   const senderNames = useMemo(
-    () =>
-      conversation?.type === 'group'
-        ? new Map(conversation.members.map((m) => [m.userId, m.displayName]))
-        : null,
+    () => (conversation?.type === 'group' ? new Map(conversation.members.map((m) => [m.userId, m.displayName])) : null),
     [conversation],
   );
 
@@ -73,14 +120,23 @@ function ConversationScreen({ conversationId }: { conversationId: string }) {
   }
 
   const title = conversation ? conversationTitle(conversation, profile.id) : '';
-  const subtitle = !conversation
-    ? ''
-    : conversation.type === 'group'
-      ? `${conversation.members.length} members`
-      : (() => {
-          const other = otherMember(conversation, profile.id);
-          return other ? `@${other.username}` : '';
-        })();
+  const subtitle = (() => {
+    if (!conversation) return '';
+    if (conversation.type === 'group') {
+      const online = live.onlineUserIds.length;
+      return online > 0 ? `${conversation.members.length} members, ${online} online` : `${conversation.members.length} members`;
+    }
+    const other = otherMember(conversation, profile.id);
+    if (!other) return '';
+    if (live.onlineUserIds.includes(other.userId)) return 'Online';
+    return other.lastSeenAt ? formatLastSeen(other.lastSeenAt) : `@${other.username}`;
+  })();
+
+  const lastMine = messages.state.messages.findLast((m) => m.senderId === profile.id);
+  const receipt = conversation && lastMine ? receiptLabel(lastMine, conversation, profile.id) : null;
+  const typingNames = live.typingUserIds.map(
+    (id) => conversation?.members.find((m) => m.userId === id)?.displayName ?? 'Someone',
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -93,7 +149,9 @@ function ConversationScreen({ conversationId }: { conversationId: string }) {
             <Avatar name={title} size="sm" />
             <div className="min-w-0">
               <h1 className="truncate font-semibold">{title}</h1>
-              {subtitle && <p className="truncate text-xs text-ink-muted">{subtitle}</p>}
+              {subtitle && (
+                <p className={`truncate text-xs ${subtitle === 'Online' ? 'text-accent' : 'text-ink-muted'}`}>{subtitle}</p>
+              )}
             </div>
           </>
         ) : (
@@ -131,11 +189,21 @@ function ConversationScreen({ conversationId }: { conversationId: string }) {
           olderStatus={messages.state.older}
           onLoadOlder={messages.loadOlder}
           onRetry={messages.retry}
+          receipt={receipt}
+          onAtBottomChange={setAtBottom}
         />
       )}
 
+      <TypingIndicator names={typingNames} />
       <LiveStatusNotice status={messages.liveStatus} />
-      <Composer onSend={messages.send} disabled={messages.state.status !== 'ready'} />
+      <Composer
+        onSend={(content) => {
+          live.stopTyping();
+          messages.send(content);
+        }}
+        onTyping={live.notifyTyping}
+        disabled={messages.state.status !== 'ready'}
+      />
     </div>
   );
 }

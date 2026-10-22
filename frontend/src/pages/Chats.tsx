@@ -1,14 +1,20 @@
 import { Outlet, useMatch } from 'react-router';
 import { ConversationList } from '../components/chat/ConversationList';
+import { useActivityReporter } from '../hooks/useActivityReporter';
 import { ChatsContext, useConversationList } from '../hooks/useChats';
+import { useProfile } from '../hooks/useProfile';
 
 /**
  * Chat layout. Desktop: conversation list beside the open conversation.
  * Mobile: one at a time, the list at "/", a conversation full-screen at /conversations/...
  */
 export function Chats() {
-  const chats = useConversationList();
+  const { profile } = useProfile();
   const inConversation = useMatch('/conversations/*') !== null;
+  const openConversation = useMatch('/conversations/:conversationId')?.params.conversationId;
+  const activeId = openConversation && openConversation !== 'new' ? openConversation : null;
+  const chats = useConversationList(profile.id, activeId);
+  useActivityReporter();
 
   return (
     <ChatsContext.Provider value={chats}>

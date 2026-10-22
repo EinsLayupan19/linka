@@ -24,6 +24,8 @@ export function makeMessage(overrides: Partial<Message> = {}): Message {
   };
 }
 
+export const noMarkers = { lastDeliveredAt: null, lastReadAt: null, lastSeenAt: null };
+
 export function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
   return {
     id: CONVERSATION_ID,
@@ -32,10 +34,11 @@ export function makeConversation(overrides: Partial<Conversation> = {}): Convers
     createdAt: '2026-10-22T08:00:00.000Z',
     updatedAt: '2026-10-22T08:00:00.000Z',
     members: [
-      { userId: TEST_USER_ID, role: 'member', joinedAt: '2026-10-22T08:00:00.000Z', username: 'maya', displayName: 'Maya Reyes', avatarPath: null },
-      { userId: OTHER_USER_ID, role: 'member', joinedAt: '2026-10-22T08:00:00.000Z', username: 'jonas', displayName: 'Jonas Lindqvist', avatarPath: null },
+      { userId: TEST_USER_ID, role: 'member', joinedAt: '2026-10-22T08:00:00.000Z', username: 'maya', displayName: 'Maya Reyes', avatarPath: null, ...noMarkers },
+      { userId: OTHER_USER_ID, role: 'member', joinedAt: '2026-10-22T08:00:00.000Z', username: 'jonas', displayName: 'Jonas Lindqvist', avatarPath: null, ...noMarkers },
     ],
     lastMessage: null,
+    unreadCount: 0,
     ...overrides,
   };
 }
