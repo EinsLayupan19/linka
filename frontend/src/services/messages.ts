@@ -16,9 +16,13 @@ export function listMessages(
 }
 
 /**
- * Sends a text message. `clientId` identifies this send: retrying with the same clientId
- * returns the original message instead of creating a second one.
+ * Sends a message: text, attachments (already uploaded and ready), or both. `clientId`
+ * identifies this send: retrying with the same clientId returns the original message instead
+ * of creating a second one.
  */
-export function sendMessage(conversationId: string, input: { content: string; clientId: string }): Promise<Message> {
+export function sendMessage(
+  conversationId: string,
+  input: { content?: string; clientId: string; attachmentIds?: string[] },
+): Promise<Message> {
   return apiRequest(messagesPath(conversationId), messageSchema, { auth: true, method: 'POST', json: input });
 }

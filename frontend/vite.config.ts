@@ -14,6 +14,9 @@ export default defineConfig(({ mode }) => ({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
+    // The first test in a file that renders the whole App pays its cold start (2-3 s alone),
+    // which can pass the 5 s default when every file runs in parallel.
+    testTimeout: 15_000,
     env: {
       VITE_API_URL: 'http://api.test',
     },

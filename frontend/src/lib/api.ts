@@ -35,6 +35,8 @@ export interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
   auth?: boolean;
   /** Request body, sent as JSON. */
   json?: unknown;
+  /** Request body sent as raw bytes with this type (file uploads); not combined with json. */
+  file?: { body: Blob; contentType: string };
 }
 
 /** The current access token. supabase-js refreshes it first if it has expired. */
@@ -49,10 +51,11 @@ async function accessToken(): Promise<string> {
  * Aborted requests reject with the original AbortError so callers can ignore them.
  */
 export async function apiRequest<T>(path: string, schema: z.ZodType<T>, options: ApiRequestOptions = {}): Promise<T> {
-  const { auth, json, ...init } = options;
+  const { auth, json, file, ...init } = options;
   const headers = new Headers(init.headers);
   headers.set('Accept', 'application/json');
   if (json !== undefined) headers.set('Content-Type', 'application/json');
+  if (file) headers.set('Content-Type', file.contentType);
   if (auth) headers.set('Authorization', `Bearer ${await accessToken()}`);
 
   let response: Response;
@@ -60,7 +63,7 @@ export async function apiRequest<T>(path: string, schema: z.ZodType<T>, options:
     response = await fetch(`${env.VITE_API_URL}${path}`, {
       ...init,
       headers,
-      body: json === undefined ? null : JSON.stringify(json),
+      body: file ? file.body : json === undefined ? null : JSON.stringify(json),
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error;

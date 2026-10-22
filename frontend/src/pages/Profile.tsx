@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { updateProfileSchema } from '@linka/shared';
+import { AvatarEditor } from '../components/profile/AvatarEditor';
 import { Alert } from '../components/ui/Alert';
 import { Button } from '../components/ui/Button';
 import { TextField } from '../components/ui/TextField';
@@ -51,19 +52,14 @@ export function Profile() {
 
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-12 sm:px-6 sm:py-16">
-      <div className="flex items-center gap-4">
-        {/* Avatar uploads arrive with media sharing; until then, the initial stands in. */}
-        <span
-          aria-hidden="true"
-          className="grid size-14 shrink-0 place-items-center rounded-full bg-accent text-xl font-semibold text-on-accent"
-        >
-          {profile.displayName.charAt(0).toUpperCase()}
-        </span>
-        <div className="min-w-0">
-          <h1 className="truncate text-2xl font-semibold tracking-tight">{profile.displayName}</h1>
-          <p className="truncate text-ink-muted">@{profile.username}</p>
-        </div>
+      <div className="min-w-0">
+        <h1 className="truncate text-2xl font-semibold tracking-tight">{profile.displayName}</h1>
+        <p className="truncate text-ink-muted">@{profile.username}</p>
       </div>
+
+      <section aria-label="Profile picture" className="mt-6">
+        <AvatarEditor profile={profile} onChange={setProfile} />
+      </section>
 
       <dl className="mt-8 grid gap-4 border-t border-line pt-6 text-sm sm:grid-cols-2">
         <div>

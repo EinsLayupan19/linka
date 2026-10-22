@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import type { Message, ReceiptUpdatedEvent } from '@linka/shared';
+import type { Attachment, Message, ReceiptUpdatedEvent } from '@linka/shared';
 import { toApiError } from '../lib/api';
 import { listMessages, sendMessage } from '../services/messages';
 import { subscribeToConversation, type LiveStatus } from '../services/realtime';
@@ -23,8 +23,8 @@ export interface ConversationMessagesOptions {
  *   this conversation is open and left when it closes
  * - after every (re)join, the newest page again, merged by id, so nothing sent while
  *   disconnected is missed
- * - sending with a pending state, failure and retry; retries reuse the clientId so the
- *   server never stores a message twice
+ * - sending (text and/or uploaded attachments) with a pending state, failure and retry;
+ *   retries reuse the clientId so the server never stores a message twice
  */
 export function useConversationMessages(conversationId: string, options: ConversationMessagesOptions = {}) {
   const [state, dispatch] = useReducer(conversationMessagesReducer, initialMessagesState);
@@ -92,9 +92,13 @@ export function useConversationMessages(conversationId: string, options: Convers
   }, [conversationId, isReady]);
 
   const deliver = useCallback(
-    (clientId: string, content: string) => {
+    (clientId: string, content: string, attachments: Attachment[]) => {
       const target = conversationId;
-      sendMessage(target, { content, clientId }).then(
+      sendMessage(target, {
+        clientId,
+        ...(content ? { content } : {}),
+        ...(attachments.length > 0 ? { attachmentIds: attachments.map((a) => a.id) } : {}),
+      }).then(
         (message) => {
           if (activeConversation.current === target) dispatch({ type: 'received', messages: [message] });
           optionsRef.current.onActivity?.(message);
@@ -110,10 +114,13 @@ export function useConversationMessages(conversationId: string, options: Convers
   );
 
   const send = useCallback(
-    (content: string) => {
+    (content: string, attachments: Attachment[] = []) => {
       const clientId = crypto.randomUUID();
-      dispatch({ type: 'sendStarted', pending: { clientId, content, createdAt: new Date().toISOString(), status: 'sending' } });
-      deliver(clientId, content);
+      dispatch({
+        type: 'sendStarted',
+        pending: { clientId, content, attachments, createdAt: new Date().toISOString(), status: 'sending' },
+      });
+      deliver(clientId, content, attachments);
     },
     [deliver],
   );
@@ -123,7 +130,7 @@ export function useConversationMessages(conversationId: string, options: Convers
       const pending = state.pending.find((p) => p.clientId === clientId);
       if (!pending || pending.status !== 'failed') return;
       dispatch({ type: 'sendRetried', clientId });
-      deliver(clientId, pending.content);
+      deliver(clientId, pending.content, pending.attachments);
     },
     [deliver, state.pending],
   );

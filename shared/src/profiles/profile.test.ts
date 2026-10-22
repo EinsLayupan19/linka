@@ -56,7 +56,7 @@ describe('profileSchema', () => {
         id: '0f8fad5b-d9cb-469f-a165-70867728950e',
         username: 'maya',
         displayName: 'Maya',
-        avatarPath: null,
+        avatarUrl: null,
         createdAt: '2026-10-21T08:00:00.000Z',
         updatedAt: '2026-10-21T08:00:00.000Z',
       }).success,

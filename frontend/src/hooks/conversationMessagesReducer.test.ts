@@ -32,7 +32,7 @@ describe('loading', () => {
 describe('duplicates', () => {
   it('shows a message once when the API response and the realtime event both carry it', () => {
     const mine = makeMessage({ clientId: 'c1' });
-    let state = reduce(ready(), { type: 'sendStarted', pending: { clientId: 'c1', content: 'hi', createdAt: mine.createdAt, status: 'sending' } });
+    let state = reduce(ready(), { type: 'sendStarted', pending: { clientId: 'c1', content: 'hi', attachments: [], createdAt: mine.createdAt, status: 'sending' } });
     state = reduce(state, { type: 'received', messages: [mine] }); // realtime echo first
     state = reduce(state, { type: 'received', messages: [mine] }); // then the API response
     expect(state.messages.filter((m) => m.id === mine.id)).toHaveLength(1);
@@ -49,12 +49,12 @@ describe('duplicates', () => {
 
 describe('sending', () => {
   it('marks a failed send and lets it be retried', () => {
-    let state = reduce(ready(), { type: 'sendStarted', pending: { clientId: 'c1', content: 'hi', createdAt: '', status: 'sending' } });
+    let state = reduce(ready(), { type: 'sendStarted', pending: { clientId: 'c1', content: 'hi', attachments: [], createdAt: '', status: 'sending' } });
     state = reduce(state, { type: 'sendFailed', clientId: 'c1', error: 'Could not reach the server.' });
     expect(state.pending[0]).toMatchObject({ status: 'failed', error: 'Could not reach the server.' });
 
     state = reduce(state, { type: 'sendRetried', clientId: 'c1' });
-    expect(state.pending[0]).toEqual({ clientId: 'c1', content: 'hi', createdAt: '', status: 'sending' });
+    expect(state.pending[0]).toEqual({ clientId: 'c1', content: 'hi', attachments: [], createdAt: '', status: 'sending' });
   });
 });
 
@@ -77,7 +77,7 @@ describe('after reconnecting', () => {
 
   it('clears pending messages that turn out to have been sent', () => {
     const sent = makeMessage({ clientId: 'c1' });
-    let state = reduce(ready(), { type: 'sendStarted', pending: { clientId: 'c1', content: 'x', createdAt: '', status: 'failed' } });
+    let state = reduce(ready(), { type: 'sendStarted', pending: { clientId: 'c1', content: 'x', attachments: [], createdAt: '', status: 'failed' } });
     state = reduce(state, { type: 'latestRefetched', page: page([sent]) });
     expect(state.pending).toEqual([]);
   });

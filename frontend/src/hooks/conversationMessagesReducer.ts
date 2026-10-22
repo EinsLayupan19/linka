@@ -1,11 +1,14 @@
-import type { Message, MessagePage } from '@linka/shared';
+import type { Attachment, Message, MessagePage } from '@linka/shared';
 import type { ApiError } from '../lib/api';
 import { mergeMessages } from '../utils/messageList';
 
 /** A message the user sent that the server has not confirmed yet. */
 export interface PendingMessage {
   clientId: string;
+  /** '' for a message that is only attachments. */
   content: string;
+  /** Already uploaded; sent with the message (and again on retry). */
+  attachments: Attachment[];
   /** Local time, only for display while pending. */
   createdAt: string;
   status: 'sending' | 'failed';
@@ -120,7 +123,11 @@ export function conversationMessagesReducer(
     case 'sendRetried':
       return {
         ...state,
-        pending: state.pending.map((p) => (p.clientId === action.clientId ? { clientId: p.clientId, content: p.content, createdAt: p.createdAt, status: 'sending' } : p)),
+        pending: state.pending.map((p) =>
+          p.clientId === action.clientId
+            ? { clientId: p.clientId, content: p.content, attachments: p.attachments, createdAt: p.createdAt, status: 'sending' }
+            : p,
+        ),
       };
 
     case 'sendFailed':

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Transaction } from '@electric-sql/pglite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDatabase, type TestDatabase } from '../test/db.js';
@@ -22,6 +23,29 @@ async function one<T>(sql: string, params: unknown[] = []): Promise<T> {
 const asUser = <T>(userId: string, run: (tx: Transaction) => Promise<T>) => t.asRole('authenticated', userId, run);
 const rowsAs = (userId: string, sql: string, params: unknown[] = []) =>
   asUser(userId, async (tx) => (await tx.query(sql, params)).rows);
+
+let seedAttachmentPath: string;
+
+/** An attachment row in the Phase 6 shape (path <conversation>/<uploader>/<id>.<ext>). */
+async function insertAttachment(o: {
+  conversationId: string;
+  messageId: string | null;
+  uploaderId: string;
+  fileName?: string;
+  contentType?: string;
+  sizeBytes?: number;
+  storagePath?: string;
+}) {
+  const id = randomUUID();
+  const fileName = o.fileName ?? 'plan.pdf';
+  const storagePath = o.storagePath ?? `${o.conversationId}/${o.uploaderId}/${id}.${fileName.split('.').pop()}`;
+  await t.client.query(
+    `insert into message_attachments (id, conversation_id, message_id, uploader_id, client_id, status, storage_path, file_name, content_type, size_bytes)
+     values ($1, $2, $3, $4, $5, 'ready', $6, $7, $8, $9)`,
+    [id, o.conversationId, o.messageId, o.uploaderId, randomUUID(), storagePath, fileName, o.contentType ?? 'application/pdf', o.sizeBytes ?? 2048],
+  );
+  return { id, storagePath };
+}
 
 beforeAll(async () => {
   t = await createTestDatabase();
@@ -51,10 +75,7 @@ beforeAll(async () => {
     "insert into messages (conversation_id, sender_id, content) values ($1, $2, 'See you Saturday') returning id",
     [groupId, maya],
   ));
-  await t.client.query(
-    "insert into message_attachments (message_id, storage_path, file_name, content_type, size_bytes) values ($1, 'attachments/plan.pdf', 'plan.pdf', 'application/pdf', 2048)",
-    [messageId],
-  );
+  ({ storagePath: seedAttachmentPath } = await insertAttachment({ conversationId: groupId, messageId, uploaderId: maya }));
   ({ id: callId } = await one<{ id: string }>(
     "insert into calls (conversation_id, initiator_id, type) values ($1, $2, 'voice') returning id",
     [groupId, maya],
@@ -298,7 +319,8 @@ describe('message and attachment constraints', () => {
   ])('rejects a text message with %s', async (_label, content) => {
     await expect(
       t.client.query('insert into messages (conversation_id, sender_id, content) values ($1, $2, $3)', [groupId, maya, content]),
-    ).rejects.toThrow(/messages_text_content/);
+      // Phase 6 added messages_content_length (captions); for over-long text either check may fire.
+    ).rejects.toThrow(/messages_(text_content|content_length)/);
   });
 
   it('requires the message to belong to an existing conversation', async () => {
@@ -311,22 +333,18 @@ describe('message and attachment constraints', () => {
   });
 
   it('requires attachments to belong to an existing message', async () => {
+    // Phase 6: the key is (message_id, conversation_id), so it is named message_attachments_message_fk.
     await expect(
-      t.client.query(
-        "insert into message_attachments (message_id, storage_path, file_name, content_type, size_bytes) values ($1, 'x/1', 'a.png', 'image/png', 10)",
-        ['3d5e7f9a-1b2c-4d3e-9f6a-8b0c2d4e6f8a'],
-      ),
-    ).rejects.toThrow(/message_attachments_message_id_messages_id_fk/);
+      insertAttachment({ conversationId: groupId, messageId: '3d5e7f9a-1b2c-4d3e-9f6a-8b0c2d4e6f8a', uploaderId: maya }),
+    ).rejects.toThrow(/message_attachments_message_fk/);
   });
 
-  it('rejects empty files and duplicate storage paths', async () => {
-    const insert = (path: string, size: number) =>
-      t.client.query(
-        "insert into message_attachments (message_id, storage_path, file_name, content_type, size_bytes) values ($1, $2, 'a.png', 'image/png', $3)",
-        [messageId, path, size],
-      );
-    await expect(insert('attachments/empty.png', 0)).rejects.toThrow(/message_attachments_size_positive/);
-    await expect(insert('attachments/plan.pdf', 10)).rejects.toThrow(/message_attachments_storage_path_unique/);
+  it('rejects empty files and reusing another row’s storage path', async () => {
+    const base = { conversationId: groupId, messageId, uploaderId: maya, fileName: 'a.png', contentType: 'image/png' };
+    await expect(insertAttachment({ ...base, sizeBytes: 0 })).rejects.toThrow(/message_attachments_size_positive/);
+    // Phase 6: a path must contain the row's own id, so another row's path is rejected by the
+    // path-shape check before uniqueness is even reached.
+    await expect(insertAttachment({ ...base, storagePath: seedAttachmentPath })).rejects.toThrow(/message_attachments_path_shape/);
   });
 });
 
@@ -373,10 +391,7 @@ describe('deletes', () => {
       "insert into messages (conversation_id, sender_id, content) values ($1, $2, 'bye') returning id",
       [id, owner],
     );
-    await t.client.query(
-      "insert into message_attachments (message_id, storage_path, file_name, content_type, size_bytes) values ($1, 'temp/1', 'a.txt', 'text/plain', 1)",
-      [msg],
-    );
+    await insertAttachment({ conversationId: id, messageId: msg, uploaderId: owner, fileName: 'a.txt', contentType: 'text/plain', sizeBytes: 1 });
     await t.client.query("insert into calls (conversation_id, type) values ($1, 'voice')", [id]);
 
     await t.client.query('delete from conversations where id = $1', [id]);

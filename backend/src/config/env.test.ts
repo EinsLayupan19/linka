@@ -42,6 +42,22 @@ describe('parseEnv', () => {
     expect(() => parseEnv({ SUPABASE_URL: 'abc.supabase' })).toThrow(/SUPABASE_URL/);
   });
 
+  it('treats SUPABASE_SECRET_KEY as optional in development and required in production', () => {
+    expect(parseEnv({ SUPABASE_SECRET_KEY: '' }).SUPABASE_SECRET_KEY).toBeUndefined();
+    expect(() => parseEnv({ NODE_ENV: 'production' })).toThrow(/SUPABASE_SECRET_KEY/);
+  });
+
+  it('refuses the publishable key (or anything too short) as SUPABASE_SECRET_KEY, without echoing it', () => {
+    const publishable = 'sb_publishable_abcdefghijklmnopqrstuvwxyz';
+    expect(() => parseEnv({ SUPABASE_SECRET_KEY: publishable })).toThrow(
+      expect.objectContaining({ message: expect.stringMatching(/SUPABASE_SECRET_KEY/) }),
+    );
+    expect(() => parseEnv({ SUPABASE_SECRET_KEY: publishable })).toThrow(
+      expect.objectContaining({ message: expect.not.stringContaining(publishable) }),
+    );
+    expect(() => parseEnv({ SUPABASE_SECRET_KEY: 'short' })).toThrow(/SUPABASE_SECRET_KEY/);
+  });
+
   it('never includes variable values in the error message', () => {
     const secret = 'mysql://admin:SuperSecret123@host/db';
 

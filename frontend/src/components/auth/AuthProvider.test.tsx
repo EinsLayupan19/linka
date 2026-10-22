@@ -2,6 +2,9 @@ import { act, render, screen } from '@testing-library/react';
 import type { Session } from '@supabase/supabase-js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuth } from '../../hooks/useAuth';
+import { attachmentUrl, clearAttachmentUrls } from '../../services/attachmentUrls';
+import { mockApi } from '../../test/api';
+import { jsonResponse } from '../../test/fetch';
 import { authMock, fakeSession, supabaseState } from '../../test/supabaseMock';
 import { AuthProvider } from './AuthProvider';
 
@@ -35,6 +38,7 @@ function captureListener() {
 
 beforeEach(() => {
   supabaseState.configured = true;
+  clearAttachmentUrls();
 });
 
 describe('AuthProvider', () => {
@@ -81,6 +85,27 @@ describe('AuthProvider', () => {
 
     auth.emit('SIGNED_OUT', null);
     expect(screen.getByTestId('status')).toHaveTextContent('signed_out');
+  });
+
+  it('forgets cached attachment URLs on sign-out, so the next user never reuses them', async () => {
+    const id = '3f9a1c2e-4b6d-4e8f-9a1b-2c3d4e5f6a7b';
+    const api = mockApi(() =>
+      jsonResponse({ urls: [{ id, url: 'https://storage.test/sign/x', expiresAt: new Date(Date.now() + 600_000).toISOString() }] }),
+    );
+    const auth = captureListener();
+    render(
+      <AuthProvider>
+        <ShowAuth />
+      </AuthProvider>,
+    );
+    auth.emit('SIGNED_IN', fakeSession());
+    await attachmentUrl(id);
+    await attachmentUrl(id);
+    expect(api.calls).toHaveLength(1);
+
+    auth.emit('SIGNED_OUT', null);
+    await attachmentUrl(id);
+    expect(api.calls).toHaveLength(2);
   });
 
   it('treats a password-recovery link as a signed-in session', () => {

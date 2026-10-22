@@ -15,5 +15,8 @@ export default defineConfig({
     // Each PGlite instance takes a moment to start and migrate.
     testTimeout: 20_000,
     hookTimeout: 30_000,
+    // Many PGlite instances migrating at once starve each other (CPU and memory) until setup
+    // times out; a few workers finish just as fast overall.
+    maxWorkers: 4,
   },
 });

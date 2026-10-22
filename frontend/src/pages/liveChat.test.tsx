@@ -195,7 +195,7 @@ describe('read receipts', () => {
   it('shows how many group members read my latest message', async () => {
     const mine = makeMessage({ senderId: TEST_USER_ID, content: 'Plan?' });
     const member = (userId: string, name: string, lastReadAt: string | null) => ({
-      userId, role: 'member' as const, joinedAt: '2026-10-22T08:00:00.000Z', username: name, displayName: name, avatarPath: null, ...noMarkers, lastReadAt,
+      userId, role: 'member' as const, joinedAt: '2026-10-22T08:00:00.000Z', username: name, displayName: name, avatarUrl: null, ...noMarkers, lastReadAt,
     });
     const group = makeConversation({
       type: 'group',

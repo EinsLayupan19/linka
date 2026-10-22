@@ -1,5 +1,6 @@
 export * from './api/errors.js';
 export * from './api/health.js';
+export * from './attachments/attachment.js';
 export * from './auth/credentials.js';
 export * from './calls/call.js';
 export * from './conversations/conversation.js';

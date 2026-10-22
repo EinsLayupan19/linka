@@ -20,6 +20,7 @@ export function makeMessage(overrides: Partial<Message> = {}): Message {
     createdAt: new Date(Date.UTC(2026, 9, 22, 9, 0, counter)).toISOString(),
     editedAt: null,
     deletedAt: null,
+    attachments: [],
     ...overrides,
   };
 }
@@ -34,8 +35,8 @@ export function makeConversation(overrides: Partial<Conversation> = {}): Convers
     createdAt: '2026-10-22T08:00:00.000Z',
     updatedAt: '2026-10-22T08:00:00.000Z',
     members: [
-      { userId: TEST_USER_ID, role: 'member', joinedAt: '2026-10-22T08:00:00.000Z', username: 'maya', displayName: 'Maya Reyes', avatarPath: null, ...noMarkers },
-      { userId: OTHER_USER_ID, role: 'member', joinedAt: '2026-10-22T08:00:00.000Z', username: 'jonas', displayName: 'Jonas Lindqvist', avatarPath: null, ...noMarkers },
+      { userId: TEST_USER_ID, role: 'member', joinedAt: '2026-10-22T08:00:00.000Z', username: 'maya', displayName: 'Maya Reyes', avatarUrl: null, ...noMarkers },
+      { userId: OTHER_USER_ID, role: 'member', joinedAt: '2026-10-22T08:00:00.000Z', username: 'jonas', displayName: 'Jonas Lindqvist', avatarUrl: null, ...noMarkers },
     ],
     lastMessage: null,
     unreadCount: 0,

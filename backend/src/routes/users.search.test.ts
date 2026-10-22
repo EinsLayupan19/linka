@@ -69,7 +69,7 @@ describe('GET /api/users/search', () => {
 
   it('returns public fields only, never email', async () => {
     const res = await search('jonas');
-    expect(Object.keys(res.body.users[0]).sort()).toEqual(['avatarPath', 'displayName', 'id', 'username']);
+    expect(Object.keys(res.body.users[0]).sort()).toEqual(['avatarUrl', 'displayName', 'id', 'username']);
     expect(JSON.stringify(res.body)).not.toContain('@');
   });
 

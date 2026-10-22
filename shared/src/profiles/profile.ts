@@ -41,8 +41,11 @@ export const profileSchema = z.object({
   id: z.uuid(),
   username: z.string(),
   displayName: z.string(),
-  /** Storage path of the avatar image. Uploads arrive in the media phase. */
-  avatarPath: z.string().nullable(),
+  /**
+   * Short-lived signed URL of the profile picture, or null. The storage path itself is never
+   * sent to clients; request the resource again for a fresh URL.
+   */
+  avatarUrl: z.url().nullable(),
   createdAt: z.iso.datetime({ offset: true }),
   updatedAt: z.iso.datetime({ offset: true }),
 });
@@ -54,7 +57,7 @@ export const userSummarySchema = profileSchema.pick({
   id: true,
   username: true,
   displayName: true,
-  avatarPath: true,
+  avatarUrl: true,
 });
 
 export type UserSummary = z.infer<typeof userSummarySchema>;

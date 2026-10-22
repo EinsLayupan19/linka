@@ -7,7 +7,7 @@ const ME = 'me';
 const at = (seconds: number) => new Date(Date.UTC(2026, 9, 22, 10, 0, seconds)).toISOString();
 
 function member(userId: string, markers: Partial<Pick<ConversationMember, 'lastDeliveredAt' | 'lastReadAt'>> = {}): ConversationMember {
-  return { userId, role: 'member', joinedAt: at(0), username: userId, displayName: userId, avatarPath: null, ...noMarkers, ...markers };
+  return { userId, role: 'member', joinedAt: at(0), username: userId, displayName: userId, avatarUrl: null, ...noMarkers, ...markers };
 }
 
 describe('receiptLabel (1:1)', () => {

@@ -61,7 +61,7 @@ because, with email confirmation on, sign-up returns no session, and a taken use
 surface as a confusing sign-up failure.
 
 **Privacy model.** A user can read and change only their own full profile. Since Phase 3 the API
-also shows other users' *public* fields (`id`, `username`, `displayName`, `avatarPath`) in two
+also shows other users' *public* fields (`id`, `username`, `displayName`, and since Phase 6 a signed `avatarUrl`) in two
 places: to fellow members of a conversation, and in username search. Direct database access (RLS)
 still allows reading only your own profile row. Email addresses stay in Supabase `auth.users`, are
 never copied into `profiles` and are never returned for other users.
@@ -74,16 +74,16 @@ refresh token, so it cannot be renewed.
 
 | Folder / file          | Responsibility                                                      |
 | ---------------------- | ------------------------------------------------------------------- |
-| `server.ts`            | Starts the HTTP server, graceful shutdown                           |
+| `server.ts`            | Starts the HTTP server and the unsent-upload sweep, graceful shutdown |
 | `app.ts`               | Builds the Express app (no `listen`), so tests can use it directly |
 | `config/`              | Loads and validates environment variables with Zod (fails fast)     |
 | `middleware/`          | Cross-cutting concerns: `requireAuth`, 404 handler, error handler   |
-| `routes/`              | URL -> handler mapping. Kept thin (`health`, `users`, `conversations`) |
-| `services/`            | Business logic: `auth` (tokens), `profiles`, `conversations`, `membership`, `conversationPermissions`, `messages`, `calls`, `health` |
+| `routes/`              | URL -> handler mapping. Kept thin (`health`, `users`, `conversations`, `attachments`) |
+| `services/`            | Business logic: `auth` (tokens), `profiles`, `conversations`, `membership`, `conversationPermissions`, `messages`, `markers`, `attachments`, `storage` (the only Storage client), `media` (avatar URLs), `calls`, `health` |
 | `validation/`          | `parseBody`: shared Zod schema -> parsed data or 400 with field errors |
 | `db/`                  | Drizzle client, schema and migrations                               |
-| `utils/`               | Small helpers (`AppError`)                                          |
-| `test/`                | Test-only helpers: in-memory Postgres (PGlite), signed test tokens  |
+| `utils/`               | Small helpers (`AppError`, `cursor`, `fileSignature`)               |
+| `test/`                | Test-only helpers: in-memory Postgres (PGlite), signed test tokens, in-memory Storage |
 
 `controllers/` from PLAN.md is created if route handlers grow beyond a few lines.
 
@@ -95,6 +95,8 @@ refresh token, so it cannot be renewed.
 | POST   | `/api/users/me` | `{ username, displayName }`   | 201 profile, 409 `USERNAME_TAKEN` / `PROFILE_EXISTS` |
 | PATCH  | `/api/users/me` | `{ displayName }`             | 200 profile, 404 `PROFILE_NOT_FOUND`      |
 | GET    | `/api/users/search?q=` |                        | 200 `{ users }`: username prefix (2+ chars), case-insensitive, max 20, excludes you, public fields only |
+| PUT    | `/api/users/me/avatar` | the image (JPEG/PNG/WebP, max 2 MB), `Content-Type` = its type | 200 profile; 415 type, 413 size, 422 content does not match, 503 storage not configured |
+| DELETE | `/api/users/me/avatar` |                        | 200 profile without a picture |
 
 **API (Phase 3): conversations.** All require a token. `:conversationId` and `:userId` are UUIDs.
 
@@ -143,11 +145,23 @@ yet (calling phases).
 | Method | Path                                              | Body / query                     | Result |
 | ------ | ------------------------------------------------- | -------------------------------- | ------ |
 | GET    | `/api/conversations/:conversationId/messages`     | `?limit=1..100` (default 50), `?before=<cursor>` | 200 `{ messages, nextCursor }`, messages oldest first |
-| POST   | `/api/conversations/:conversationId/messages`     | `{ content, clientId }`          | 201 message; 200 with the original if `clientId` was already used |
+| POST   | `/api/conversations/:conversationId/messages`     | `{ clientId, content?, attachmentIds? }` (content or attachments) | 201 message; 200 with the original if `clientId` was already used |
 
 Members only (non-members: 404). The sender is always the token's user; `senderId` in the body is
 rejected. Content is stored exactly as typed: not empty, not whitespace-only, at most 4000
 characters. Invalid `limit` or `before` answers 400 with a field error.
+
+**API (Phase 6): attachments.** Members only; details in [Files and media](#files-and-media-phase-6).
+
+| Method | Path                                              | Body                                         | Result |
+| ------ | ------------------------------------------------- | -------------------------------------------- | ------ |
+| POST   | `/api/conversations/:conversationId/attachments`  | `{ clientId, fileName, contentType, sizeBytes }` | 201 `{ attachment, upload: { url, expiresAt } }`; 200 for the same `clientId` |
+| POST   | `/api/attachments/:attachmentId/complete`         |                                              | 200 attachment (ready); 409 `UPLOAD_INCOMPLETE`; 422 `UPLOAD_REJECTED` |
+| DELETE | `/api/attachments/:attachmentId`                  |                                              | 204; 409 `ATTACHMENT_IN_USE` once sent |
+| POST   | `/api/attachments/urls`                           | `{ attachmentIds }` (1-50)                   | 200 `{ urls: [{ id, url, expiresAt }] }`, only what you may see |
+
+Someone else's upload, or a malformed id, answers 404 `ATTACHMENT_NOT_FOUND`. Storage failures
+answer 503 without details.
 
 **Limits.** Groups have at most 100 members (bounded member lists and realtime fan-out).
 Conversation lists return the 50 most recently active (`GET /api/conversations` is structured so a
@@ -373,6 +387,90 @@ shared shape `{ "error": { "code": "...", "message": "..." } }`.
 limit of 100 kB, no stack traces in responses. Token verification arrived in Phase 2; rate limiting
 is part of the Phase 9 audit (Supabase Auth applies its own rate limits to sign-in and emails).
 
+## Files and media (Phase 6)
+
+### Storage layout
+
+Two **private** Supabase Storage buckets, created by migration `0008` (never public, no
+`storage.objects` policies for browser roles, so the browser cannot list, read or write them with
+its own key):
+
+| Bucket        | Holds                 | Path (chosen by the server)                      | Bucket limits                         |
+| ------------- | --------------------- | ------------------------------------------------ | ------------------------------------- |
+| `attachments` | Message images, files | `<conversationId>/<uploaderId>/<attachmentId>.<ext>` | 25 MB, the allowed MIME list       |
+| `avatars`     | Profile pictures      | `<userId>/<random uuid>.<ext>`                   | 2 MB, JPEG / PNG / WebP               |
+
+Only the API talks to Storage, with the server-only `SUPABASE_SECRET_KEY`
+(`backend/src/services/storage.ts`). Browsers get one of two things, both short-lived and scoped
+to exactly one object: a **signed upload URL** (single use, 2 hours, fixed by Supabase) or a
+**signed download URL** (attachments 10 minutes, avatars 1 hour). Storage paths never appear in
+API responses or realtime payloads, and are never built from client input: file names are display
+metadata only. A database CHECK (`message_attachments_path_shape`) pins every path to its own
+conversation, uploader and row id.
+
+### Allowed files
+
+| Kind   | Types                                           | Max   |
+| ------ | ----------------------------------------------- | ----- |
+| Images | JPEG, PNG, GIF, WebP                            | 10 MB |
+| Files  | PDF, plain text, ZIP, DOCX, XLSX, PPTX          | 25 MB |
+| Avatar | JPEG, PNG, WebP                                 | 2 MB  |
+
+At most 10 attachments per message. SVG and HTML are not allowed (they can carry scripts).
+The client's MIME type is never trusted on its own: after upload the server reads the first 512
+bytes and checks the file signature (`backend/src/utils/fileSignature.ts`); Office files must be
+ZIP containers, text must contain no NUL bytes and must not be a binary format in disguise. The
+limits live in `@linka/shared` and are enforced by the browser (early, friendly errors), the API,
+the database CHECKs and the bucket settings.
+
+### Upload lifecycle
+
+```text
+1 POST /api/conversations/:id/attachments  {clientId, fileName, contentType, sizeBytes}
+    member? valid? -> row (pending) + signed upload URL           (same clientId = same row)
+2 browser PUTs the file to the signed URL (XHR, for progress; abortable)
+3 POST /api/attachments/:id/complete
+    object exists? size = declared? stored type = declared? signature matches?
+      yes -> ready            no -> object and row deleted, 422 UPLOAD_REJECTED
+      nothing uploaded yet -> 409 UPLOAD_INCOMPLETE (retry)
+4 POST /api/conversations/:id/messages  {clientId, content?, attachmentIds}
+    in one transaction: lock the caller's own ready, unsent uploads in THIS conversation
+    (SELECT ... FOR UPDATE), insert the message, link them
+```
+
+- **Retries.** Every step is idempotent: starting again with the same `clientId` returns the same
+  upload (with a fresh upload URL while pending); completing a ready upload returns it; sending
+  again with the same message `clientId` returns the original message.
+- **Cancellation.** Removing a file in the composer aborts its PUT and calls
+  `DELETE /api/attachments/:id` (only the uploader, only while unsent; a sent attachment answers
+  409). Leaving the conversation does the same for every unsent file.
+- **Orphans.** Anything left behind (closed tab, lost network, abandoned pending rows) is removed
+  by a sweep in the API process: a minute after start, then every 30 minutes, it deletes unsent
+  uploads older than 24 hours. Rows are deleted first (only if still unsent, so a send racing the
+  sweep either wins or fails cleanly), then their files. A file whose row is gone is harmless:
+  nothing references it and nobody can get a URL for it.
+- **Realtime.** The message triggers are deferred to commit (`DEFERRABLE INITIALLY DEFERRED`), so
+  `message.created` and `conversation.activity` include the attachments linked in the same
+  transaction. Payloads carry only `id`, `fileName`, `contentType` and `sizeBytes`.
+
+### Viewing files
+
+`POST /api/attachments/urls` (up to 50 ids) returns signed URLs only for attachments the caller may
+see right now: member of the conversation, upload verified, and either sent or their own. Others
+are silently left out (no existence leak). The client batches every URL a page needs into one
+request, caches them until a minute before expiry, refreshes them while a conversation stays open,
+retries a broken image once with a fresh URL, and clears the cache on sign-out. Images open full
+size in a new tab, served by Storage on its own origin (never by Linka's), and files download with
+Storage's `download` flag under their original name.
+
+### Profile pictures
+
+`PUT /api/users/me/avatar` takes the image itself as the request body (at most 2 MB, parsed only on
+that route), checks type, size and signature, stores it under a new random name and then deletes
+the old one; `DELETE /api/users/me/avatar` removes it. Every response that includes a user
+(profile, members, search) carries a fresh signed `avatarUrl`, signed in one batch per response;
+if signing fails the user simply shows their initial.
+
 ## Frontend (`frontend/src`)
 
 | Folder       | Responsibility                                              |
@@ -392,8 +490,8 @@ is part of the Phase 9 audit (Supabase Auth applies its own rate limits to sign-
 **Forms.** Validated with the same Zod schemas the API uses (`@linka/shared`). Labels sit above
 inputs, errors below (linked with `aria-describedby`), form-level messages use `Alert`.
 
-**Motion.** Kept minimal and functional: button hover/press feedback only, disabled under
-`prefers-reduced-motion`. Loading placeholders are static (no looping animation). New messages
+**Motion.** Kept minimal and functional: button hover/press feedback and a short linear catch-up on
+upload progress bars, all disabled under `prefers-reduced-motion`. Loading placeholders are static (no looping animation). New messages
 appear without animation: they arrive constantly, so motion there would be noise.
 
 **Chat accessibility.** The message list is a `role="log"` region (new messages are announced
@@ -404,8 +502,9 @@ method is composing); failed sends and the reconnecting notice are announced.
 
 - `frontend/.env` contains only public values (`VITE_` prefix). `lib/env.ts` rejects Supabase secret
   keys (`sb_secret_...` or legacy `service_role` JWTs) at startup.
-- `backend/.env` contains server-only values. Only variable *names* are ever printed when validation
-  fails, never values.
+- `backend/.env` contains server-only values, including `SUPABASE_SECRET_KEY` (Storage access; the
+  API refuses a publishable key there). Only variable *names* are ever printed when validation
+  fails, never values. Storage errors are logged on the server and answered with a generic 503.
 - Tests never read real `.env` files (Vite `envDir: false` in test mode; backend tests set their own
   variables), so they cannot hit real services.
 
@@ -422,4 +521,5 @@ Notes collected so far:
 - `GET /api/health` always returns 200 while the process is up, so a database outage does not make
   Render restart a healthy API. The body reports `status: "degraded"` instead.
 - `VITE_API_URL` must be set on Vercel; it defaults to `http://localhost:3000` otherwise.
+- Render needs `SUPABASE_SECRET_KEY` (server-only) for uploads; Vercel must never get it.
 - Vercel needs an SPA rewrite so deep links (e.g. `/chats/123`) serve `index.html`.

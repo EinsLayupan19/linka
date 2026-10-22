@@ -7,6 +7,7 @@ export interface ApiCall {
   query: URLSearchParams;
   body: unknown;
   authorization: string | null;
+  contentType: string | null;
 }
 
 type Handler = (call: ApiCall) => Response | Promise<Response> | undefined;
@@ -23,8 +24,10 @@ export function mockApi(handler: Handler) {
       method: init?.method ?? 'GET',
       path: url.pathname,
       query: url.searchParams,
-      body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      // JSON bodies are parsed; anything else (a file upload) is kept as sent.
+      body: typeof init?.body === 'string' ? JSON.parse(init.body) : (init?.body ?? undefined),
       authorization: new Headers(init?.headers).get('Authorization'),
+      contentType: new Headers(init?.headers).get('Content-Type'),
     };
     calls.push(call);
     return (await handler(call)) ?? jsonResponse({ error: { code: 'NOT_FOUND', message: 'Not found' } }, 404);

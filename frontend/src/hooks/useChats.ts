@@ -63,32 +63,21 @@ export function useConversationList(myUserId: string, activeConversationId: stri
 
   const refresh = useCallback(() => setAttempt((n) => n + 1), []);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    listConversations(controller.signal).then(
-      (conversations) => {
-        counted.current.clear();
-        setList({ status: 'ready', conversations });
-        // Everything in the list has now reached this client.
-        for (const conversation of conversations) {
-          delivery.seed(conversation.id, myMember(conversation, myUserId)?.lastDeliveredAt ?? null);
-          const last = conversation.lastMessage;
-          if (last && last.senderId !== myUserId) delivery.report(conversation.id, last.createdAt);
-        }
-      },
-      (error: unknown) => {
-        if (!controller.signal.aborted) setList({ status: 'error', error: toApiError(error) });
-      },
-    );
-    return () => controller.abort();
-  }, [attempt, delivery, myUserId]);
+  /**
+   * Messages shown before the list had loaded (e.g. sent right after opening a conversation).
+   * The list may have been read before they existed, so they are applied once it arrives.
+   */
+  const early = useRef(new Map<string, Message>());
 
   /** Shows `message` as the conversation's latest; counts it as unread when that applies. */
   const showMessage = useCallback(
     (message: Message, { countUnread }: { countUnread: boolean }) => {
       let known = true;
       setList((current) => {
-        if (current.status !== 'ready') return current;
+        if (current.status !== 'ready') {
+          early.current.set(message.id, message); // keyed by id, so repeating this is harmless
+          return current;
+        }
         const conversation = current.conversations.find((c) => c.id === message.conversationId);
         if (!conversation) {
           known = false;
@@ -127,6 +116,31 @@ export function useConversationList(myUserId: string, activeConversationId: stri
   );
 
   const applyMessage = useCallback((message: Message) => showMessage(message, { countUnread: false }), [showMessage]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    listConversations(controller.signal).then(
+      (conversations) => {
+        counted.current.clear();
+        setList({ status: 'ready', conversations });
+        // Preview and order only: the server's unread counts are authoritative and may already
+        // include these messages.
+        const pending = [...early.current.values()];
+        early.current.clear();
+        for (const message of pending) showMessage(message, { countUnread: false });
+        // Everything in the list has now reached this client.
+        for (const conversation of conversations) {
+          delivery.seed(conversation.id, myMember(conversation, myUserId)?.lastDeliveredAt ?? null);
+          const last = conversation.lastMessage;
+          if (last && last.senderId !== myUserId) delivery.report(conversation.id, last.createdAt);
+        }
+      },
+      (error: unknown) => {
+        if (!controller.signal.aborted) setList({ status: 'error', error: toApiError(error) });
+      },
+    );
+    return () => controller.abort();
+  }, [attempt, delivery, myUserId, showMessage]);
 
   const applyRead = useCallback(
     (conversationId: string, lastReadAt: string) => {

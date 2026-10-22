@@ -178,6 +178,34 @@ describe('sending', () => {
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('');
   });
 
+  it('keeps a message sent before the list finished loading in its preview', async () => {
+    let releaseList: () => void = () => {};
+    const listReady = new Promise<void>((resolve) => (releaseList = resolve));
+    const api = mockApi((call) => {
+      if (call.path === '/api/users/me') return jsonResponse(testProfile());
+      if (call.method === 'GET' && call.path === '/api/conversations') {
+        // A list read before the message existed, answered after it was sent.
+        return listReady.then(() => jsonResponse({ conversations: [makeConversation()] }));
+      }
+      if (call.method === 'GET' && call.path === conversationPath) return jsonResponse(makeConversation());
+      if (call.method === 'GET' && call.path === messagesPath) return jsonResponse({ messages: [], nextCursor: null });
+      if (call.method === 'POST' && call.path === messagesPath) return jsonResponse(sentMessage(call), 201);
+      return undefined;
+    });
+    renderWithAuth(<App />, { path: `/conversations/${CONVERSATION_ID}` });
+    await screen.findByRole('textbox', { name: 'Message' });
+
+    typeAndSend('Early bird');
+    await waitFor(() => expect(api.callsTo('POST', messagesPath)).toHaveLength(1));
+    expect(await within(await findMessageLog()).findByText('Early bird')).toBeInTheDocument();
+    await act(async () => releaseList());
+
+    const nav = screen.getByRole('navigation', { name: 'Conversations' });
+    expect(await within(nav).findByText('You: Early bird')).toBeInTheDocument();
+    // Preview only: the server's unread count is not changed by it.
+    expect(within(nav).queryByText(/unread/)).not.toBeInTheDocument();
+  });
+
   it('shows "Sending…" until the server confirms', async () => {
     let confirm: (response: Response) => void = () => {};
     await openConversation({ onSend: () => new Promise<Response>((resolve) => (confirm = resolve)) });
@@ -312,7 +340,7 @@ describe('new chat', () => {
       if (call.path === '/api/users/me') return jsonResponse(testProfile());
       if (call.method === 'GET' && call.path === '/api/conversations') return jsonResponse({ conversations: [] });
       if (call.path === '/api/users/search') {
-        return jsonResponse({ users: [{ id: OTHER_USER_ID, username: 'jonas', displayName: 'Jonas Lindqvist', avatarPath: null }] });
+        return jsonResponse({ users: [{ id: OTHER_USER_ID, username: 'jonas', displayName: 'Jonas Lindqvist', avatarUrl: null }] });
       }
       if (call.method === 'POST' && call.path === '/api/conversations') return jsonResponse(makeConversation(), 201);
       if (call.path === conversationPath) return jsonResponse(makeConversation());

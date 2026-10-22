@@ -17,7 +17,8 @@ import { conversationMembers, conversations, messages, profiles, type Conversati
 import { AppError } from '../utils/AppError.js';
 import { canAddMembers, canChangeRole, canEditGroup, removalDecision } from './conversationPermissions.js';
 import { requireMembership } from './membership.js';
-import { toMessage } from './messages.js';
+import { noMediaUrls, type MediaUrls } from './media.js';
+import { loadAttachments, toMessage } from './messages.js';
 
 export const CONVERSATION_LIST_LIMIT = 50;
 
@@ -43,7 +44,7 @@ function directPair(a: string, b: string): { directLowUserId: string; directHigh
   return a < b ? { directLowUserId: a, directHighUserId: b } : { directLowUserId: b, directHighUserId: a };
 }
 
-export function createConversationStore(db: Database): ConversationStore {
+export function createConversationStore(db: Database, media: MediaUrls = noMediaUrls): ConversationStore {
   async function loadMembers(conversationIds: string[]): Promise<Map<string, ConversationMember[]>> {
     const rows =
       conversationIds.length === 0
@@ -66,11 +67,14 @@ export function createConversationStore(db: Database): ConversationStore {
             .where(inArray(conversationMembers.conversationId, conversationIds))
             .orderBy(asc(conversationMembers.joinedAt), asc(profiles.username));
 
+    // One signing call for every member's picture in these conversations.
+    const avatarUrls = await media.avatarUrls(rows.map((r) => r.avatarPath));
     const byConversation = new Map<string, ConversationMember[]>();
-    for (const { conversationId, joinedAt, lastDeliveredAt, lastReadAt, lastSeenAt, ...member } of rows) {
+    for (const { conversationId, joinedAt, lastDeliveredAt, lastReadAt, lastSeenAt, avatarPath, ...member } of rows) {
       const list = byConversation.get(conversationId) ?? [];
       list.push({
         ...member,
+        avatarUrl: (avatarPath && avatarUrls.get(avatarPath)) || null,
         joinedAt: joinedAt.toISOString(),
         lastDeliveredAt: lastDeliveredAt?.toISOString() ?? null,
         lastReadAt: lastReadAt?.toISOString() ?? null,
@@ -96,7 +100,10 @@ export function createConversationStore(db: Database): ConversationStore {
       .from(conversations)
       .innerJoinLateral(latest, sql`true`)
       .where(inArray(conversations.id, conversationIds));
-    return new Map(rows.map((row) => [row.latest.conversationId, toMessage(row.latest)]));
+    const attachments = await loadAttachments(db, rows.map((row) => row.latest.id));
+    return new Map(
+      rows.map((row) => [row.latest.conversationId, toMessage(row.latest, attachments.get(row.latest.id) ?? [])]),
+    );
   }
 
   /**

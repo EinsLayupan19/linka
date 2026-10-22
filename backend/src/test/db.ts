@@ -55,6 +55,17 @@ const SUPABASE_STUB = `
     select nullif(current_setting('realtime.topic', true), '')
   $$;
 
+  -- Supabase Storage's bucket table, reduced to the columns our migrations set. Objects are not
+  -- modelled here: tests use an in-memory storage gateway instead.
+  create schema storage;
+  create table storage.buckets (
+    id text primary key,
+    name text not null,
+    public boolean default false,
+    file_size_limit bigint,
+    allowed_mime_types text[]
+  );
+
   create function realtime.send(payload jsonb, event text, topic text, private boolean default true)
   returns void language plpgsql as $$
   begin

@@ -83,7 +83,7 @@ describe('creating conversations', () => {
 
     expect(Object.keys(conversation.members[0]!).sort()).toEqual(
       // Markers and last seen are for read receipts and "Last seen", shown to fellow members only.
-      ['avatarPath', 'displayName', 'joinedAt', 'lastDeliveredAt', 'lastReadAt', 'lastSeenAt', 'role', 'userId', 'username'].sort(),
+      ['avatarUrl', 'displayName', 'joinedAt', 'lastDeliveredAt', 'lastReadAt', 'lastSeenAt', 'role', 'userId', 'username'].sort(),
     );
     expect(JSON.stringify(conversation)).not.toContain('@example.test');
   });

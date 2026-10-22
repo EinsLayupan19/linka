@@ -1,8 +1,9 @@
 import { sql } from 'drizzle-orm';
-import { bigint, check, index, pgPolicy, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { bigint, check, foreignKey, index, pgPolicy, pgTable, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { ATTACHMENT_CONTENT_TYPES, MAX_FILE_BYTES } from '@linka/shared';
 import { authenticatedRole } from 'drizzle-orm/supabase';
 import { conversations } from './conversations.js';
-import { messageType } from './enums.js';
+import { attachmentStatus, messageType } from './enums.js';
 import { profiles } from './profiles.js';
 import { isConversationMember } from './rls.js';
 
@@ -50,6 +51,11 @@ export const messages = pgTable(
       'messages_text_content',
       sql`${table.type} <> 'text' or (${table.content} is not null and char_length(${table.content}) <= 4000 and btrim(${table.content}) <> '')`,
     ),
+    // Captions of attachment messages are optional but bounded like text.
+    check('messages_content_length', sql`${table.content} is null or char_length(${table.content}) <= 4000`),
+    // Lets attachments reference (message, conversation) together, so an attachment can never be
+    // linked to a message in a different conversation.
+    unique('messages_id_conversation_unique').on(table.id, table.conversationId),
     pgPolicy('messages_select_member', {
       for: 'select',
       to: authenticatedRole,
@@ -58,17 +64,30 @@ export const messages = pgTable(
   ],
 ).enableRLS();
 
+const allowedContentTypes = sql.raw(ATTACHMENT_CONTENT_TYPES.map((type) => `'${type}'`).join(', '));
+
 /**
- * Files attached to a message. Database foundation only: uploads to Supabase Storage
- * arrive with media sharing. storage_path is unique so two rows never point at one file.
+ * Files attached to messages. Only metadata lives here; the bytes live in the private
+ * `attachments` Storage bucket at storage_path = <conversation_id>/<uploader_id>/<id>.<ext>.
+ *
+ * Lifecycle: a row is created `pending` when an upload starts (message_id null), becomes
+ * `ready` once the server has verified the uploaded object, and is attached when a message is
+ * sent with it. Unattached rows older than UNATTACHED_UPLOAD_TTL_HOURS are swept, file first.
  */
 export const messageAttachments = pgTable(
   'message_attachments',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    messageId: uuid('message_id')
+    conversationId: uuid('conversation_id')
       .notNull()
-      .references(() => messages.id, { onDelete: 'cascade' }),
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    /** Null until the attachment is sent in a message. */
+    messageId: uuid('message_id'),
+    /** Null if the uploader's account was deleted. */
+    uploaderId: uuid('uploader_id').references(() => profiles.id, { onDelete: 'set null' }),
+    /** The uploader's idempotency key: starting the same upload again finds this row. */
+    clientId: uuid('client_id').notNull(),
+    status: attachmentStatus('status').notNull().default('pending'),
     storagePath: text('storage_path').notNull().unique('message_attachments_storage_path_unique'),
     fileName: text('file_name').notNull(),
     contentType: text('content_type').notNull(),
@@ -76,21 +95,38 @@ export const messageAttachments = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    // An attachment belongs to a message in its own conversation, never another one.
+    foreignKey({
+      name: 'message_attachments_message_fk',
+      columns: [table.messageId, table.conversationId],
+      foreignColumns: [messages.id, messages.conversationId],
+    }).onDelete('cascade'),
     // Load the attachments of a page of messages.
     index('message_attachments_message_id_idx').on(table.messageId),
+    // Retried upload starts find the same row.
+    uniqueIndex('message_attachments_uploader_client_idx').on(table.uploaderId, table.clientId),
+    // The cleanup sweep: unattached uploads by age.
+    index('message_attachments_unattached_idx').on(table.createdAt).where(sql`${table.messageId} is null`),
     check('message_attachments_size_positive', sql`${table.sizeBytes} > 0`),
+    check('message_attachments_size_limit', sql`${table.sizeBytes} <= ${sql.raw(String(MAX_FILE_BYTES))}`),
+    check('message_attachments_file_name_length', sql`char_length(${table.fileName}) between 1 and 255`),
+    check('message_attachments_content_type', sql`${table.contentType} in (${allowedContentTypes})`),
+    // Only verified uploads can be part of a message.
+    check('message_attachments_attached_ready', sql`${table.messageId} is null or ${table.status} = 'ready'`),
+    // The path always lives under this row's own conversation and id.
     check(
-      'message_attachments_file_name_length',
-      sql`char_length(${table.fileName}) between 1 and 255`,
+      'message_attachments_path_shape',
+      sql`${table.storagePath} = ${table.conversationId}::text || '/' || split_part(${table.storagePath}, '/', 2) || '/' || ${table.id}::text || '.' || split_part(split_part(${table.storagePath}, '/', 3), '.', 2)
+        and split_part(${table.storagePath}, '/', 2) ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        and split_part(split_part(${table.storagePath}, '/', 3), '.', 2) ~ '^[a-z0-9]{1,5}$'
+        and (${table.uploaderId} is null or split_part(${table.storagePath}, '/', 2) = ${table.uploaderId}::text)`,
     ),
-    // Visible to members of the conversation the message belongs to.
+    // Members see attached files; an uploader also sees their own unsent uploads.
     pgPolicy('message_attachments_select_member', {
       for: 'select',
       to: authenticatedRole,
-      using: sql`exists (
-        select 1 from public.messages m
-        where m.id = ${table.messageId} and ${isConversationMember(sql`m.conversation_id`)}
-      )`,
+      using: sql`${isConversationMember(table.conversationId)}
+        and (${table.messageId} is not null or ${table.uploaderId} = (select auth.uid()))`,
     }),
   ],
 ).enableRLS();

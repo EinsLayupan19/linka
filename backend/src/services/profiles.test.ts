@@ -31,7 +31,7 @@ describe('profile store', () => {
     const userId = await t.createAuthUser();
     const profile = await store.create(userId, { username: 'maya', displayName: 'Maya Reyes' });
 
-    expect(profile).toMatchObject({ id: userId, username: 'maya', displayName: 'Maya Reyes', avatarPath: null });
+    expect(profile).toMatchObject({ id: userId, username: 'maya', displayName: 'Maya Reyes', avatarUrl: null });
     expect(new Date(profile.createdAt).getTime()).not.toBeNaN();
     expect(await store.findById(userId)).toEqual(profile);
   });

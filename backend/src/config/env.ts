@@ -32,10 +32,21 @@ const envSchema = z
         .transform((url) => url.replace(/\/+$/, ''))
         .optional(),
     ),
+    // Server-only Supabase secret key (sb_secret_... or the legacy service_role key). Used only
+    // for Storage: issuing signed upload/download URLs and checking uploaded files. Never sent
+    // to the browser.
+    SUPABASE_SECRET_KEY: z.preprocess(
+      emptyToUndefined,
+      z
+        .string()
+        .min(20, 'looks too short to be a Supabase secret key')
+        .refine((key) => !key.startsWith('sb_publishable_'), 'is the publishable key; use the secret key')
+        .optional(),
+    ),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production') return;
-    for (const key of ['DATABASE_URL', 'SUPABASE_URL'] as const) {
+    for (const key of ['DATABASE_URL', 'SUPABASE_URL', 'SUPABASE_SECRET_KEY'] as const) {
       if (!env[key]) ctx.addIssue({ code: 'custom', path: [key], message: 'is required in production' });
     }
   });

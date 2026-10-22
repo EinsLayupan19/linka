@@ -3,6 +3,7 @@ import type { Message } from '@linka/shared';
 import type { PendingMessage } from '../../hooks/conversationMessagesReducer';
 import { formatDayLabel, formatFullTimestamp, formatMessageTime, isSameDay } from '../../utils/time';
 import { Button } from '../ui/Button';
+import { MessageAttachments } from './MessageAttachments';
 
 interface MessageListProps {
   messages: Message[];
@@ -134,7 +135,10 @@ export function MessageList({
                   </p>
                 )}
                 <Bubble mine={mine}>
-                  <p className="whitespace-pre-wrap break-words">{message.content}</p>
+                  {message.attachments.length > 0 && <MessageAttachments attachments={message.attachments} />}
+                  {message.content && (
+                    <p className={`whitespace-pre-wrap break-words ${message.attachments.length > 0 ? 'mt-1.5' : ''}`}>{message.content}</p>
+                  )}
                   <time
                     dateTime={message.createdAt}
                     title={formatFullTimestamp(message.createdAt)}
@@ -154,7 +158,16 @@ export function MessageList({
 
           {pending.map((p) => (
             <Bubble key={p.clientId} mine>
-              <p className="whitespace-pre-wrap break-words">{p.content}</p>
+              {p.attachments.length > 0 && (
+                <ul aria-label="Attachments" className="grid gap-1">
+                  {p.attachments.map((a) => (
+                    <li key={a.id} className="truncate rounded-lg border border-current/20 px-2.5 py-1.5 text-sm">
+                      {a.fileName}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {p.content && <p className={`whitespace-pre-wrap break-words ${p.attachments.length > 0 ? 'mt-1.5' : ''}`}>{p.content}</p>}
               {p.status === 'sending' ? (
                 <span className="mt-0.5 block text-right text-[11px] text-on-accent">Sending…</span>
               ) : (

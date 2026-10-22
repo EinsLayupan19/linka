@@ -43,7 +43,7 @@ describe('message.created broadcast', () => {
   it('includes only Message fields', async () => {
     const events = await t.broadcastsOn(conversationTopic(conversationId), MESSAGE_CREATED_EVENT);
     expect(Object.keys(events[0]!.payload as object).sort()).toEqual(
-      ['clientId', 'content', 'conversationId', 'createdAt', 'deletedAt', 'editedAt', 'id', 'senderId', 'type'].sort(),
+      ['attachments', 'clientId', 'content', 'conversationId', 'createdAt', 'deletedAt', 'editedAt', 'id', 'senderId', 'type'].sort(),
     );
   });
 

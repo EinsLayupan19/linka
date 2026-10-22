@@ -146,7 +146,11 @@ function ConversationScreen({ conversationId }: { conversationId: string }) {
         </Link>
         {conversation ? (
           <>
-            <Avatar name={title} size="sm" />
+            <Avatar
+              name={title}
+              size="sm"
+              src={conversation.type === 'direct' ? otherMember(conversation, profile.id)?.avatarUrl : null}
+            />
             <div className="min-w-0">
               <h1 className="truncate font-semibold">{title}</h1>
               {subtitle && (
@@ -197,9 +201,10 @@ function ConversationScreen({ conversationId }: { conversationId: string }) {
       <TypingIndicator names={typingNames} />
       <LiveStatusNotice status={messages.liveStatus} />
       <Composer
-        onSend={(content) => {
+        conversationId={conversationId}
+        onSend={({ content, attachments }) => {
           live.stopTyping();
-          messages.send(content);
+          messages.send(content ?? '', attachments);
         }}
         onTyping={live.notifyTyping}
         disabled={messages.state.status !== 'ready'}

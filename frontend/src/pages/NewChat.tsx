@@ -111,7 +111,7 @@ export function NewChat() {
                     disabled={starting !== null}
                     className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-surface focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60"
                   >
-                    <Avatar name={user.displayName} />
+                    <Avatar name={user.displayName} src={user.avatarUrl} />
                     <span className="min-w-0">
                       <span className="block truncate font-medium">{user.displayName}</span>
                       <span className="block truncate text-sm text-ink-muted">@{user.username}</span>

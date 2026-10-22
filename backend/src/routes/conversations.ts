@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import {
   addMembersSchema,
+  createAttachmentUploadSchema,
   createConversationSchema,
   createMessageSchema,
   ErrorCode,
@@ -12,6 +13,7 @@ import {
   updateMemberRoleSchema,
 } from '@linka/shared';
 import { authUser, requireAuth } from '../middleware/requireAuth.js';
+import type { AttachmentStore } from '../services/attachments.js';
 import type { VerifyAccessToken } from '../services/auth.js';
 import type { ConversationStore } from '../services/conversations.js';
 import type { MarkerStore } from '../services/markers.js';
@@ -31,6 +33,7 @@ export function conversationsRouter(deps: {
   conversations: ConversationStore | null;
   messages: MessageStore | null;
   markers: MarkerStore | null;
+  attachments: AttachmentStore | null;
 }): Router {
   const router = Router();
 
@@ -123,6 +126,16 @@ export function conversationsRouter(deps: {
     const id = conversationId(req.params.conversationId);
     const { message, created } = await messageStore().create(authUser(req).userId, id, input);
     res.status(created ? 201 : 200).json(message);
+  });
+
+  // Start uploading a file to this conversation: returns a single-use upload URL for a path the
+  // server chose. 201 when new; 200 for a retry with the same clientId.
+  router.post('/:conversationId/attachments', async (req, res) => {
+    const input = parseBody(createAttachmentUploadSchema, req.body);
+    const id = conversationId(req.params.conversationId);
+    if (!deps.attachments) throw databaseUnavailable();
+    const { response, created } = await deps.attachments.start(authUser(req).userId, id, input);
+    res.status(created ? 201 : 200).json(response);
   });
 
   // The caller's read marker. There is no :userId: nobody can move someone else's marker.

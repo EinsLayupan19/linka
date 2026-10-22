@@ -35,6 +35,14 @@ export const ErrorCode = {
   CallInProgress: 'CALL_IN_PROGRESS',
   /** A read marker update would move it backwards (e.g. a stale tab); nothing changed. */
   MarkerBehind: 'MARKER_BEHIND',
+  AttachmentNotFound: 'ATTACHMENT_NOT_FOUND',
+  /** The file has not been uploaded yet (or the upload did not finish). */
+  UploadIncomplete: 'UPLOAD_INCOMPLETE',
+  /** The uploaded bytes do not match the declared type or size; the upload was discarded. */
+  UploadRejected: 'UPLOAD_REJECTED',
+  /** The attachment is already part of a message. */
+  AttachmentInUse: 'ATTACHMENT_IN_USE',
+  UnsupportedMediaType: 'UNSUPPORTED_MEDIA_TYPE',
   PayloadTooLarge: 'PAYLOAD_TOO_LARGE',
   ServiceUnavailable: 'SERVICE_UNAVAILABLE',
   Internal: 'INTERNAL_ERROR',

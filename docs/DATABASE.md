@@ -27,6 +27,8 @@ conversations ─────────┘
 | `0004_message_broadcast`  | custom    | `message.created` broadcast trigger; `private.can_access_conversation_topic()`; RLS policy on `realtime.messages` |
 | `0005_presence_and_markers` | generated | `profiles.last_seen_at`; read/delivery markers to millisecond precision |
 | `0006_live_state_events`  | custom    | Triggers for list, receipt and membership events; user and live channel helpers and policies |
+| `0007_attachment_uploads` | generated | `attachment_status` enum, `message_type` value `attachment`; upload columns, constraints and indexes on `message_attachments`; `messages_content_length`; pending uploads visible only to their uploader (policy) |
+| `0008_attachment_storage` | custom    | `private.attachments_json()`; attachments in message payloads; message triggers deferred to commit; the two private Storage buckets |
 
 None are applied to a hosted database yet (no Supabase project).
 
@@ -39,7 +41,8 @@ database cannot disagree. Adding a value is an `ALTER TYPE ... ADD VALUE` migrat
 | ------------------- | ----------------------------------------------- |
 | `conversation_type` | `direct`, `group`                               |
 | `member_role`       | `owner`, `admin`, `member`                      |
-| `message_type`      | `text`                                          |
+| `message_type`      | `text`, `attachment`                            |
+| `attachment_status` | `pending`, `ready`                              |
 | `call_type`         | `voice`, `video`                                |
 | `call_status`       | `ringing`, `active`, `ended`, `missed`, `declined` |
 
@@ -52,7 +55,7 @@ database cannot disagree. Adding a value is an `ALTER TYPE ... ADD VALUE` migrat
 | `id`           | `uuid` PK     | References `auth.users(id)`, `on delete cascade`             |
 | `username`     | `text`        | Unique, lowercase, `^[a-z0-9_]{3,20}$` (CHECK)               |
 | `display_name` | `text`        | 1-50 characters, not blank (CHECK)                           |
-| `avatar_path`  | `text` null   | Storage path, filled in by the media phase                   |
+| `avatar_path`  | `text` null   | Path in the private `avatars` bucket; the API returns a signed `avatarUrl`, never the path |
 | `last_seen_at` | `timestamptz(3)` null | "Last seen": reported on start, every 5 min while visible, and on hide; at most one write per minute |
 | `created_at`, `updated_at` | `timestamptz` |                                                  |
 
@@ -100,7 +103,7 @@ and the pair no longer blocks anything.
 | `conversation_id` | `uuid`         | → `conversations`, `cascade`                             |
 | `sender_id`       | `uuid` null    | → `profiles`, `set null` (history survives account deletion) |
 | `type`            | `message_type` | Default `text`                                           |
-| `content`         | `text` null    | `text` messages: not null, not blank, at most 4000 chars; stored as typed |
+| `content`         | `text` null    | `text` messages: not null, not blank, at most 4000 chars; `attachment` messages: optional caption, at most 4000 (`messages_content_length`); stored as typed |
 | `created_at`      | `timestamptz(3)` | Millisecond precision, matching API timestamps and cursors exactly |
 | `client_id`       | `uuid` null    | Sender's idempotency key; unique per sender              |
 | `edited_at`       | `timestamptz` null | Per PLAN.md (editing UI comes later)                  |
@@ -109,9 +112,9 @@ and the pair no longer blocks anything.
 **Ordering and pagination.** Messages are ordered by `(created_at, id)`; the id breaks ties
 between messages created in the same millisecond. Pages are read with a row-value comparison
 `(created_at, id) < (cursor)` on the `(conversation_id, created_at, id)` index; see the cursor
-format in [ARCHITECTURE.md](ARCHITECTURE.md#message-pagination). `content` is nullable so future
-types (for example attachment-only messages) do not need a rewrite; the CHECK only constrains
-`text` messages.
+format in [ARCHITECTURE.md](ARCHITECTURE.md#message-pagination). `content` is nullable for
+attachment-only messages (Phase 6); `messages_id_conversation_unique (id, conversation_id)` exists
+so attachments can reference a message *and* its conversation.
 
 **Retries.** `messages_sender_client_id_idx` is a partial unique index on `(sender_id, client_id)`
 (where `client_id` is set). Sending again with the same `client_id` finds the original row instead
@@ -120,24 +123,54 @@ of inserting a duplicate, including when two attempts race.
 **Activity.** Storing a message sets `conversations.updated_at` to the message's `created_at` (in the
 same transaction), so conversation lists sort by last activity without another column.
 
-**Realtime trigger.** `messages_broadcast_created` (`AFTER INSERT`, per row) calls
+**Realtime trigger.** `messages_broadcast_created` (`AFTER INSERT`, per row; since Phase 6 a
+`DEFERRABLE INITIALLY DEFERRED` constraint trigger, so it runs at commit and the payload includes
+the attachments linked in the same transaction) calls
 `private.broadcast_message_created()`, which sends event `message.created` on the private topic
 `conversation:<conversation_id>` via `realtime.send()`. The payload has exactly the shape of the
 shared `Message` contract (camelCase, `createdAt` formatted like JavaScript's `toISOString()`).
 Errors from `realtime.send()` are caught and logged as warnings: the message is stored regardless.
 Retries that find an existing row do not insert, so they do not broadcast again.
 
-### `message_attachments`
+### `message_attachments` (reshaped in Phase 6)
 
-| Column         | Type        | Notes                                 |
-| -------------- | ----------- | ------------------------------------- |
-| `id`           | `uuid` PK   |                                       |
-| `message_id`   | `uuid`      | → `messages`, `cascade`               |
-| `storage_path` | `text`      | Unique: two rows never share a file   |
-| `file_name`    | `text`      | 1-255 characters                      |
-| `content_type` | `text`      | Validated properly in the media phase |
-| `size_bytes`   | `bigint`    | `> 0`                                 |
-| `created_at`   | `timestamptz` |                                     |
+One row per uploaded file, created when an upload **starts** (before any message exists) and linked
+to a message when it is sent.
+
+| Column            | Type                | Notes                                                             |
+| ----------------- | ------------------- | ----------------------------------------------------------------- |
+| `id`              | `uuid` PK           | Also the file's name in Storage                                   |
+| `conversation_id` | `uuid`              | → `conversations`, `cascade`                                      |
+| `message_id`      | `uuid` null         | null until sent; → `messages` via `(message_id, conversation_id)`, `cascade` |
+| `uploader_id`     | `uuid` null         | → `profiles`, `set null`                                          |
+| `client_id`       | `uuid`              | Uploader's idempotency key; unique per uploader                   |
+| `status`          | `attachment_status` | `pending` until the API verified the uploaded bytes, then `ready` |
+| `storage_path`    | `text`              | Unique; chosen by the server; never returned by the API           |
+| `file_name`       | `text`              | Display name only, 1-255 characters                               |
+| `content_type`    | `text`              | One of the allowed types (CHECK)                                  |
+| `size_bytes`      | `bigint`            | `> 0` and at most 25 MB (CHECK)                                   |
+| `created_at`      | `timestamptz`       | Age for the unsent-upload sweep                                   |
+
+Constraints that make bad states impossible, whatever the API does:
+
+- `message_attachments_message_fk`: the composite foreign key `(message_id, conversation_id)` →
+  `messages(id, conversation_id)` (backed by `messages_id_conversation_unique`), so an attachment
+  can never be linked to a message in another conversation.
+- `message_attachments_attached_ready`: only a `ready` upload can be linked to a message.
+- `message_attachments_path_shape`: the path is exactly
+  `<conversation_id>/<uploader uuid>/<id>.<ext>` (ext `[a-z0-9]{1,5}`), the middle part equals
+  `uploader_id` while the uploader exists, and nothing else (no `..`, no extra segments).
+- `message_attachments_uploader_client_idx`: one upload per `(uploader_id, client_id)`, so a
+  retried start never creates a second row.
+- `message_attachments_content_type`, `_size_positive`, `_size_limit`, `_file_name_length`.
+
+**Sending.** The API locks the listed rows (`SELECT ... FOR UPDATE`): they must belong to the
+caller, be in this conversation, be `ready` and be unsent, or the send fails with 400 and nothing
+is stored. Two sends racing for the same upload cannot both link it.
+
+**Unsent uploads** (`message_id is null`) are found through the partial index
+`message_attachments_unattached_idx (created_at) where message_id is null`; the API's sweep deletes
+those older than 24 hours (row first, then file).
 
 ### `calls`
 
@@ -188,7 +221,7 @@ are built by `private.message_json()` and `private.iso()` to match the shared co
 | Trigger | When | Publishes |
 | ------- | ---- | --------- |
 | `messages_broadcast_created` (Phase 4) | after insert on `messages` | `message.created` on `conversation:<id>` |
-| `messages_broadcast_activity` | after insert on `messages` | `conversation.activity` on each member's `user:<id>` (at most 100) |
+| `messages_broadcast_activity` | after insert on `messages` (deferred to commit since Phase 6) | `conversation.activity` on each member's `user:<id>` (at most 100) |
 | `conversation_members_broadcast_markers` | a member's markers actually changed | `receipt.updated` on `conversation:<id>`; `conversation.read` on that member's `user:<id>` |
 | `conversation_members_broadcast_added` / `_removed` | per statement (transition tables) | `conversation.changed` to each affected user; one `conversation.updated` per conversation |
 | `conversation_members_broadcast_role` | a role changed | `conversation.updated` |
@@ -214,7 +247,9 @@ broken payload cannot block a write.
 | `messages_conversation_created_idx` `(conversation_id, created_at, id)` | History and cursor pagination in both directions; also plain `conversation_id` lookups, so no separate index |
 | `messages_sender_id_idx`                | `ON DELETE SET NULL` when a user is deleted; "messages by user" |
 | `messages_sender_client_id_idx` (partial unique) | Finding a retried send by `(sender_id, client_id)`; prevents duplicates |
-| `message_attachments_message_id_idx`    | Attachments of a page of messages                         |
+| `message_attachments_message_id_idx`    | Attachments of a page of messages (one query per page)    |
+| `message_attachments_uploader_client_idx` | Finding a retried upload start; prevents duplicates  |
+| `message_attachments_unattached_idx` (partial) | The unsent-upload sweep                             |
 | `calls_conversation_created_idx`        | Call history of a conversation                            |
 | `call_participants_user_id_idx`         | A user's calls; `ON DELETE CASCADE` from profiles         |
 | `profiles_username_prefix_idx` (`text_pattern_ops`) | Username search (`LIKE 'abc%'`); the unique index cannot serve `LIKE` under a non-C collation |
@@ -234,7 +269,7 @@ has exactly one policy, for `SELECT`, for the `authenticated` role:
 | `conversations`        | conversations they are a member of                                     |
 | `conversation_members` | memberships of conversations they belong to (who else is in them)      |
 | `messages`             | messages in their conversations                                        |
-| `message_attachments`  | attachments of messages in their conversations                         |
+| `message_attachments`  | attachments of messages in their conversations, plus their own unsent uploads (never other people's) |
 | `calls`                | calls in their conversations                                           |
 | `call_participants`    | participants of calls in their conversations                           |
 
@@ -255,6 +290,11 @@ joining a private channel. No INSERT policy: browser clients cannot publish on t
 - `linka_conversation_members_receive_live` and `linka_conversation_members_publish_live`: `SELECT`
   and `INSERT` for broadcast and presence on `live:<uuid>`, for members
   (`private.can_access_live_topic`). This is the only topic browser clients may publish on.
+
+**Storage (Phase 6).** Buckets `attachments` and `avatars` are private and have **no**
+`storage.objects` policies for `anon` or `authenticated`: browsers cannot list, read or write them
+directly. Only the API (secret key) uploads, inspects, signs and deletes; browsers use signed URLs
+scoped to one object. Do not add Storage policies or make a bucket public.
 
 **The membership helper.** Policies call `private.is_conversation_member(conversation_id)`
 (migration `0001_rls_helpers`). A policy on `conversation_members` that queried

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AuthContext, type AuthState } from '../../hooks/useAuth';
 import { getSupabase, isSupabaseConfigured } from '../../lib/supabase';
+import { clearAttachmentUrls } from '../../services/attachmentUrls';
 
 /**
  * Tracks the Supabase session for the whole app.
@@ -19,6 +20,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // PASSWORD_RECOVERY (from a reset link), etc.
     // Keep this callback synchronous: awaiting Supabase calls inside it can deadlock.
     const { data } = getSupabase().auth.onAuthStateChange((_event, session) => {
+      // Download URLs were issued to the previous user: never reuse them for someone else.
+      if (!session) clearAttachmentUrls();
       setState(session ? { status: 'signed_in', session } : { status: 'signed_out' });
     });
 

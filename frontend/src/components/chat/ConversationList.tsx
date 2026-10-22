@@ -2,7 +2,8 @@ import { Link, NavLink } from 'react-router';
 import type { Conversation } from '@linka/shared';
 import { useChats } from '../../hooks/useChats';
 import { useProfile } from '../../hooks/useProfile';
-import { conversationTitle } from '../../utils/conversation';
+import { attachmentSummary } from '../../utils/attachments';
+import { conversationTitle, otherMember } from '../../utils/conversation';
 import { unreadBadge } from '../../utils/receipts';
 import { formatListTimestamp } from '../../utils/time';
 import { Avatar } from '../ui/Avatar';
@@ -11,7 +12,8 @@ import { Button, secondaryButtonClassName } from '../ui/Button';
 function preview(conversation: Conversation, myUserId: string): string {
   const last = conversation.lastMessage;
   if (!last) return 'No messages yet';
-  const text = (last.content ?? '').replace(/\s+/g, ' ').trim();
+  // A message without text shows what it carries: "Photo", "3 photos", "plan.pdf".
+  const text = (last.content ?? '').replace(/\s+/g, ' ').trim() || attachmentSummary(last.attachments);
   return last.senderId === myUserId ? `You: ${text}` : text;
 }
 
@@ -28,7 +30,7 @@ function ConversationRow({ conversation, myUserId }: { conversation: Conversatio
           (isActive ? 'bg-surface ring-1 ring-line' : 'hover:bg-surface')
         }
       >
-        <Avatar name={title} />
+        <Avatar name={title} src={conversation.type === 'direct' ? otherMember(conversation, myUserId)?.avatarUrl : null} />
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline justify-between gap-2">
             <span className={`truncate ${unread > 0 ? 'font-semibold' : 'font-medium'}`}>{title}</span>

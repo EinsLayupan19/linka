@@ -6,8 +6,8 @@
 | 2     | Authentication & user foundation       | Complete    |
 | 3     | Database & conversation foundation     | Complete    |
 | 4     | Realtime messaging                     | Complete    |
-| 5     | Read, delivery, presence & typing      | In review   |
-| 6     | Media & file sharing                   | Not started |
+| 5     | Read, delivery, presence & typing      | Complete    |
+| 6     | Media & file sharing                   | In review   |
 | 7     | Voice calls                            | Not started |
 | 8     | Video calls                            | Not started |
 | 9     | Polish, security & scalability         | Not started |
@@ -132,6 +132,56 @@ Not verifiable until a Supabase project exists:
 - The chat UI in a real browser, including desktop, mobile and narrow layouts (behind sign-in;
   exercised through component tests only)
 
+## Phase 6: Files & media
+
+Done:
+
+- Two private Supabase Storage buckets (`attachments`, `avatars`) created by migration `0008`;
+  no browser policies, signed URLs only; the API is the only Storage client (server-only
+  `SUPABASE_SECRET_KEY`); see [ARCHITECTURE.md](ARCHITECTURE.md#files-and-media-phase-6)
+- Image and file attachments: JPEG/PNG/GIF/WebP up to 10 MB; PDF, text, ZIP, DOCX/XLSX/PPTX up to
+  25 MB; at most 10 per message; captions optional
+- Upload lifecycle: start (pending row + signed upload URL) -> direct browser PUT with progress
+  -> complete (server checks size, stored type and the file's real signature; rejects and deletes
+  otherwise) -> linked on send in one locked transaction; idempotent retries via `clientId`;
+  cancel deletes; a sweep removes unsent uploads after 24 hours
+- Short-lived signed download URLs, only for what the caller may see, batched (one request per
+  page), cached and refreshed before expiry, cleared on sign-out
+- Messages and realtime: `attachment` messages, attachments in history, sends, `message.created`
+  and `conversation.activity` (triggers deferred to commit); list previews ("Photo", "3 photos",
+  file name); ordering, pagination, unread counts and markers unchanged
+- Profile pictures: upload / replace / remove (JPEG/PNG/WebP, 2 MB, signature-checked), signed
+  `avatarUrl` on every user the API returns; avatars in the list, chat header, search and profile
+- Fixed (found by an intermittent test): a message sent or received while the conversation list
+  was still loading was missing from that list's preview; it is now applied once the list arrives
+  (preview and order only; unread counts stay server-authoritative)
+- Migrations `0007` (upload columns, constraints, indexes, enums, pending-upload RLS) and `0008`
+  (payload helper, deferred triggers, buckets); see [DATABASE.md](DATABASE.md)
+- Tests: upload API (auth, membership, types, extensions, sizes, empty files, path traversal and
+  spoofed fields, retries, mismatched content and size, incomplete uploads, cancel, sending with
+  other users', other conversations', pending and already-sent attachments, races, signed URLs for
+  members only, leaving a group, storage failures), avatars (types, SVG, spoofed content, size,
+  replace, remove, URLs in search and members), database (private buckets with the right limits,
+  RLS for unsent uploads, path/type/size/link constraints, cascade, payloads with attachments),
+  file signatures, the Storage gateway (bounded range read, generic 503s, batch signing, no
+  overwrite); client validation, direct upload (progress, errors, abort), URL cache (batching,
+  expiry, failures, sign-out), composer (progress, send gating, captions, attachment-only, limits,
+  cancel, retry with the same clientId, rejected files, cleanup on leave), rendering (images,
+  downloads, unavailable files, broken-image retry, list preview), avatar editor; mutation checks
+  on the backend and the frontend
+
+Not in this phase (by design): calls, push notifications, video or audio messages, image
+resizing/thumbnails, virus scanning, editing or deleting messages and attachments, a media gallery.
+
+Not verifiable until a Supabase project exists:
+
+- Real uploads: signed upload URLs, the browser PUT (including CORS from the app's origin) and
+  progress against Supabase Storage
+- `info()`, the Range read and signed URL behavior (including the `download` flag) on hosted Storage
+- Bucket creation by migration `0008` on hosted Supabase, and the bucket limits being enforced there
+- Deferred triggers and payloads with attachments on hosted Supabase (tested on PGlite)
+- The upload UI in a real browser (behind sign-in; exercised through component tests only)
+
 ### Supabase setup (dashboard)
 
 1. **Create the project** (hosted). Then copy:
@@ -160,6 +210,20 @@ Not verifiable until a Supabase project exists:
    preview without a reload; the sender sees "Delivered" and then "Read" after the receiver opens
    the conversation; "Online" while both have it open; "typing…" while one types.
 
+10. **Storage (Phase 6).** After `npm run db:migrate`, open *Storage*: buckets `attachments` and
+    `avatars` must exist and both must show as **private** (not public). Do not make them public and
+    do not add policies for them under *Storage > Policies*: the API signs every URL.
+11. **Server-only Storage key.** *Project Settings > API Keys*: create or copy a **secret** key
+    (`sb_secret_...`) -> `backend/.env` `SUPABASE_SECRET_KEY`, and on Render as an environment
+    variable of the API service. Never in `frontend/.env`, Vercel, the browser, logs or Git. Without
+    it the API starts, but uploads and profile pictures answer 503 and the API warns at startup.
+12. **Check uploads** in two browsers signed in as two members of one conversation: send a photo
+    with a caption and a PDF; both should appear live in the other browser, the photo should open
+    full size and the PDF should download under its name. Try a file over the limit (refused before
+    upload), cancel an upload midway, and set a profile picture (it should appear in the other
+    browser after a reload). If the browser's upload PUT fails with a CORS error, check Storage's
+    allowed origins for the project.
+
 Supabase's built-in email service is heavily rate limited and meant for testing; configure custom
 SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
 
@@ -178,7 +242,7 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
 | Profile visibility | Own full profile; public fields of fellow members and search results via the API. RLS: own row only |
 | Username | Unique, lowercase `a-z 0-9 _`, 3-20 chars; not editable yet |
 | User discovery | Username prefix search, signed-in only, max 20 results, never email |
-| Profile pictures | Media/storage phase (6) |
+| Profile pictures | Private `avatars` bucket; uploaded through the API (2 MB raw body, signature-checked); new random path per upload; signed `avatarUrl` (1 h) on every user the API returns |
 | Group roles | `owner`, `admin`, `member`; rules in ARCHITECTURE.md and `conversationPermissions.ts` |
 | Ownership | Exactly one owner; leaves only after transferring; transfer makes the old owner an admin |
 | 1:1 conversations | Exactly two members, unique per pair (database), cannot be left or changed; creating an existing one returns it |
@@ -209,6 +273,14 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
 | Enums | Postgres enums built from the shared Zod value lists |
 | Realtime messaging | Postgres Changes vs Broadcast tradeoff presented before Phase 4 |
 | TURN | Documented limitation in Phase 7; hosted provider only when needed |
+| File storage | Two private Supabase Storage buckets; no browser policies; only the API (secret key) touches Storage |
+| Attachment uploads | Browser PUTs directly to a single-use signed upload URL (no file bytes through the API); the API verifies afterwards |
+| File type trust | Never the client's MIME type alone: the declared type must match the extension, the stored type and the file signature |
+| Allowed files | JPEG, PNG, GIF, WebP (10 MB); PDF, text, ZIP, DOCX, XLSX, PPTX (25 MB); no SVG or HTML; 10 per message |
+| Storage paths | Server-chosen `<conversation>/<uploader>/<attachment>.<ext>`, pinned by a CHECK; never exposed |
+| Download URLs | Signed per request: 10 min (attachments), 1 h (avatars); members only, and unsent uploads only for their uploader |
+| Unsent uploads | Deleted on cancel and when leaving the conversation; swept by the API after 24 h |
+| Attachments in realtime | Message triggers deferred to commit so payloads include attachments; metadata only, no URLs |
 
 ## Known issues / notes
 
@@ -230,5 +302,17 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
 - Unread counts above 100 show as "99+" (counting stops at 100 on purpose).
 - The composer grows with its text in browsers that support `field-sizing: content`; elsewhere it
   stays one line tall and scrolls.
+- Signed download URLs cannot be revoked: someone who was a member can keep using a URL they already
+  received for up to 10 minutes (avatars 1 hour) after leaving. New URLs are refused at once.
+- Avatar URLs in an open page expire after an hour; the picture then falls back to the initial
+  until the data is fetched again (reopening the conversation or reloading).
+- Uploads are checked by size, type and file signature, not scanned for malware, and images are not
+  re-encoded or resized (no thumbnails yet; Phase 9 performance work).
+- If an upload's start request is cancelled while still in flight, the server may already have
+  created the pending row; the 24-hour sweep removes it.
+- The sweep runs inside the API process (every 30 minutes). On Render's free tier the process sleeps
+  when idle, so cleanup happens after it wakes. A dedicated scheduled job is a Phase 10 option.
+- Backend tests run with at most 4 Vitest workers: each test file migrates its own in-memory
+  Postgres, and ~16 at once starve each other past the setup timeout.
 - Access tokens stay valid until they expire (default 1 hour) even after logout; logout revokes the
   refresh token.

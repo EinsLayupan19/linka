@@ -12,7 +12,7 @@ export function testProfile(overrides: Partial<Profile> = {}): Profile {
     id: TEST_USER_ID,
     username: 'maya',
     displayName: 'Maya Reyes',
-    avatarPath: null,
+    avatarUrl: null,
     createdAt: '2026-10-21T08:00:00.000Z',
     updatedAt: '2026-10-21T08:00:00.000Z',
     ...overrides,
