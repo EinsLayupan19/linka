@@ -66,7 +66,7 @@ export function createApp(overrides: Partial<AppDependencies> = {}): Express {
   const app = express();
 
   app.use(helmet());
-  app.use(cors({ origin: env.CORS_ORIGIN }));
+  app.use(cors({ origin: (origin, callback) => callback(null, origin && env.CORS_ORIGIN.includes(origin) ? origin : false) }));
   app.use(express.json({ limit: '100kb' }));
 
   app.use('/api/health', healthRouter(deps.checkDatabase));
