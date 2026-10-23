@@ -4,6 +4,7 @@ import { createApp, storage } from './app.js';
 import { env } from './config/env.js';
 import { closeDatabase, db } from './db/client.js';
 import { createAttachmentStore } from './services/attachments.js';
+import { createCallStore } from './services/calls.js';
 
 const app = createApp();
 
@@ -42,10 +43,26 @@ const sweepTimer = setInterval(sweep, SWEEP_INTERVAL_MS);
 firstSweep.unref();
 sweepTimer.unref();
 
+/**
+ * Ends calls nobody is in any more: unanswered calls past the ring timeout become missed, and
+ * active calls without a heartbeat (both tabs closed, both offline) become ended, so they never
+ * block new calls. The API also does this before starting or answering a call; this sweep makes
+ * the change reach clients (call.updated) even when nobody calls.
+ */
+const CALL_SWEEP_INTERVAL_MS = 30 * 1000;
+const callStore = db ? createCallStore(db) : null;
+const callSweepTimer = setInterval(() => {
+  callStore?.expireStale().catch((error: unknown) => {
+    console.error('Call cleanup failed:', error instanceof Error ? error.message : error);
+  });
+}, CALL_SWEEP_INTERVAL_MS);
+callSweepTimer.unref();
+
 function shutdown(signal: string) {
   console.log(`${signal} received, shutting down`);
   clearTimeout(firstSweep);
   clearInterval(sweepTimer);
+  clearInterval(callSweepTimer);
   server.close(() => {
     closeDatabase()
       .catch((error: unknown) => console.error('Error while closing the database:', error))

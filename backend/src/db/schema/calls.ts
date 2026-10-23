@@ -7,8 +7,9 @@ import { profiles } from './profiles.js';
 import { isConversationMember } from './rls.js';
 
 /**
- * A voice or video call inside a conversation. Database foundation only:
- * signaling and media (WebRTC) arrive with the calling phases.
+ * A voice or video call inside a conversation. The API owns the lifecycle (ringing -> active ->
+ * ended, or missed / declined); the media itself flows browser to browser over WebRTC and never
+ * touches the database or the API.
  */
 export const calls = pgTable(
   'calls',
@@ -24,6 +25,8 @@ export const calls = pgTable(
     startedAt: timestamp('started_at', { withTimezone: true }),
     endedAt: timestamp('ended_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Last "still here" from a connected participant; an active call silent for too long is ended. */
+    lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     // Call history of a conversation, newest first.
@@ -31,6 +34,10 @@ export const calls = pgTable(
     // At most one ringing or active call per conversation.
     uniqueIndex('calls_one_ongoing_per_conversation_idx')
       .on(table.conversationId)
+      .where(sql`${table.status} in ('ringing', 'active')`),
+    // The stale-call sweep: only ringing and active calls.
+    index('calls_ongoing_idx')
+      .on(table.status)
       .where(sql`${table.status} in ('ringing', 'active')`),
     check('calls_end_after_start', sql`${table.endedAt} is null or ${table.startedAt} is null or ${table.endedAt} >= ${table.startedAt}`),
     pgPolicy('calls_select_member', {

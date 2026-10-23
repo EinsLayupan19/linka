@@ -35,6 +35,11 @@ async function groupWith(...memberIds: string[]) {
   return conversation.id;
 }
 
+async function directWith(a: string, b: string) {
+  const { conversation } = await conversations.create(a, { type: 'direct', userId: b });
+  return conversation.id;
+}
+
 describe('messages', () => {
   it('stores a member’s message with them as sender, in the right conversation', async () => {
     const [maya, jonas] = [await t.createUser(), await t.createUser()];
@@ -74,11 +79,11 @@ describe('calls', () => {
   it('lets a member start a call that includes exactly the conversation’s members', async () => {
     const [maya, jonas] = [await t.createUser(), await t.createUser()];
     const outsider = await t.createUser();
-    const conversationId = await groupWith(maya, jonas);
+    const conversationId = await directWith(maya, jonas);
 
-    const call = callSchema.parse(await callStore.start(maya, conversationId, 'video'));
+    const call = callSchema.parse(await callStore.start(maya, conversationId, 'voice'));
 
-    expect(call).toMatchObject({ conversationId, initiatorId: maya, type: 'video', status: 'ringing' });
+    expect(call).toMatchObject({ conversationId, initiatorId: maya, type: 'voice', status: 'ringing' });
     expect(call.participants.map((p) => p.userId).sort()).toEqual([maya, jonas].sort());
     expect(call.participants.find((p) => p.userId === maya)?.joinedAt).not.toBeNull();
     expect(call.participants.find((p) => p.userId === jonas)?.joinedAt).toBeNull();
@@ -87,14 +92,19 @@ describe('calls', () => {
 
   it('refuses to let non-members start a call', async () => {
     const [maya, jonas, outsider] = [await t.createUser(), await t.createUser(), await t.createUser()];
-    const conversationId = await groupWith(maya, jonas);
 
-    await expectAppError(callStore.start(outsider, conversationId, 'voice'), 404, 'CONVERSATION_NOT_FOUND');
+    await expectAppError(callStore.start(outsider, await groupWith(maya, jonas), 'voice'), 404, 'CONVERSATION_NOT_FOUND');
+    await expectAppError(callStore.start(outsider, await directWith(maya, jonas), 'voice'), 404, 'CONVERSATION_NOT_FOUND');
+  });
+
+  it('refuses group calls (Phase 7 calls are 1:1)', async () => {
+    const [maya, jonas] = [await t.createUser(), await t.createUser()];
+    await expectAppError(callStore.start(maya, await groupWith(maya, jonas), 'voice'), 400, 'CALL_NOT_SUPPORTED');
   });
 
   it('allows only one ongoing call per conversation', async () => {
     const [maya, jonas] = [await t.createUser(), await t.createUser()];
-    const conversationId = await groupWith(maya, jonas);
+    const conversationId = await directWith(maya, jonas);
     await callStore.start(maya, conversationId, 'voice');
 
     await expectAppError(callStore.start(jonas, conversationId, 'voice'), 409, 'CALL_IN_PROGRESS');
@@ -102,7 +112,7 @@ describe('calls', () => {
 
   it('shows a call to members and hides it from everyone else', async () => {
     const [maya, jonas, outsider] = [await t.createUser(), await t.createUser(), await t.createUser()];
-    const conversationId = await groupWith(maya, jonas);
+    const conversationId = await directWith(maya, jonas);
     const call = await callStore.start(maya, conversationId, 'voice');
 
     expect((await callStore.getForUser(jonas, call.id)).id).toBe(call.id);
@@ -112,7 +122,7 @@ describe('calls', () => {
 
   it('rejects an invalid call type at the database', async () => {
     const [maya, jonas] = [await t.createUser(), await t.createUser()];
-    const conversationId = await groupWith(maya, jonas);
+    const conversationId = await directWith(maya, jonas);
 
     // @ts-expect-error: deliberately invalid
     await expect(callStore.start(maya, conversationId, 'hologram')).rejects.toThrow();

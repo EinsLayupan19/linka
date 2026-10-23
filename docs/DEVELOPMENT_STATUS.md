@@ -7,8 +7,8 @@
 | 3     | Database & conversation foundation     | Complete    |
 | 4     | Realtime messaging                     | Complete    |
 | 5     | Read, delivery, presence & typing      | Complete    |
-| 6     | Media & file sharing                   | In review   |
-| 7     | Voice calls                            | Not started |
+| 6     | Media & file sharing                   | Complete    |
+| 7     | Voice calls                            | In review   |
 | 8     | Video calls                            | Not started |
 | 9     | Polish, security & scalability         | Not started |
 | 10    | Production preparation & deployment    | Not started |
@@ -182,6 +182,51 @@ Not verifiable until a Supabase project exists:
 - Deferred triggers and payloads with attachments on hosted Supabase (tested on PGlite)
 - The upload UI in a real browser (behind sign-in; exercised through component tests only)
 
+## Phase 7: Voice calls
+
+Done:
+
+- 1:1 voice calls over WebRTC: start, incoming call (announced, accept / decline), calling,
+  connecting, connected (duration, mute / unmute, "is muted"), reconnecting, end, and why it ended
+  (declined, no answer, missed, cancelled, connection lost, continued in another tab)
+- Server-authoritative lifecycle in the API with race-safe, repeatable transitions, busy and
+  in-progress checks, ring timeout, heartbeats and a stale-call sweep; see
+  [ARCHITECTURE.md](ARCHITECTURE.md#voice-calls-phase-7)
+- `call.updated` on each participant's user channel (database trigger), so calls ring on every
+  signed-in page; the conversation list and calls now live in a signed-in layout above all pages
+- Signaling on a private per-call channel (`call:<id>`) only the participants can join, only while
+  the call rings or is active; per-tab sessions and per-connection ids so reloads, tab changes and
+  crossing messages converge on one connection; batched ICE; ICE restarts; give-up after 30 s
+- WebRTC isolated in `services/webrtc.ts` (no React, no API); ICE servers served by the API
+  (`ICE_SERVERS`, default public STUN)
+- Cleanup: microphone stopped and connection closed whenever a call ends here; a caller's page
+  closing while it rings cancels the call; signing out ends it; reloaded pages can rejoin
+- Migrations `0009` (heartbeat column, sweep index) and `0010` (call payload, trigger, channel
+  policies); see [DATABASE.md](DATABASE.md)
+- Tests: call API (auth, membership, groups refused, video refused, spoofed fields, busy, glare,
+  accept/decline/end by the right person only, repeat safety, accept-vs-cancel races, two tabs
+  answering, heartbeats, ring and stale expiry, ongoing list, ICE servers, 503); database (who may
+  join and publish on the call channel, closed after the call, broadcast only, call.updated
+  payloads equal to the API, not for heartbeats or rollbacks, published on expiry); contracts;
+  config; WebRTC module (offer/answer, queued candidates, states, ICE restart, close); signaling
+  protocol with two sessions on an in-memory channel (connect, ICE batching, crossing readys,
+  reloaded callee and caller, ignored strangers / own tabs / old connections, mute, ICE restart,
+  give-up and recovery, close); call UI (microphone first, blocked or missing microphone, busy,
+  cancel, declined, no answer, connection lost, mute, remote mute, hang up and cleanup, incoming,
+  decline, missed, answered in another tab, ringing after a reload and on the profile page,
+  rejoin, a second call while busy); mutation checks on the backend and the frontend
+
+Not in this phase (by design): video (Phase 8), group calls, screen sharing, a TURN relay,
+ringtones and push notifications for incoming calls, call history in the conversation.
+
+Not verifiable until a Supabase project exists:
+
+- Real signaling over Supabase Realtime (private channel joins on `call:<id>`, message delivery
+  and rate limits) and the `call.updated` trigger on hosted Supabase
+- Real WebRTC between two browsers and networks: ICE gathering, STUN, NAT traversal, audio
+  quality, echo cancellation, device changes, autoplay and permission prompts (none of this can be
+  reliably unit-tested; it was exercised with stand-ins only)
+
 ### Supabase setup (dashboard)
 
 1. **Create the project** (hosted). Then copy:
@@ -224,6 +269,14 @@ Not verifiable until a Supabase project exists:
     browser after a reload). If the browser's upload PUT fails with a CORS error, check Storage's
     allowed origins for the project.
 
+13. **Check calls (Phase 7)** with two browsers signed in as the two members of a 1:1
+    conversation, ideally on two different networks (for example Wi-Fi and a phone hotspot): call,
+    accept, talk, mute, end; call and decline; call and let it ring out; reload one side during a
+    call and use **Join here**; turn one side's network off for a few seconds (it should show
+    "Reconnecting…" and recover). If calls connect on one network but not across networks, a TURN
+    relay is needed (not configured yet). No dashboard change is needed for calls: the channel
+    policies come with the migrations, and private channels must stay required (step 8).
+
 Supabase's built-in email service is heavily rate limited and meant for testing; configure custom
 SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
 
@@ -265,14 +318,21 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
 | Receipts | 1:1 Sent/Delivered/Read; groups "Read by N" (count only); members' markers visible to fellow members |
 | Unread counts | Server-computed per conversation, capped at 100; live adjustments idempotent per message id |
 | Live list | One `user:<id>` channel per signed-in user (only that user may join) |
-| Channels per user | At most 3: user, plus the open conversation's server channel and live channel |
+| Channels per user | At most 4: user (on every signed-in page), the open conversation's server and live channels, and a call's channel during a call |
 | Typing/presence channel | Separate member-writable `live:<id>`, so server events cannot be forged |
 | Presence scope | The open conversation only; no global directory |
 | Last seen | `profiles.last_seen_at`; on start, every 5 min while visible, on hide; at most 1 write/min; fellow members only |
 | Typing | Throttle 2 s, expiry 3 s, never stored |
 | Enums | Postgres enums built from the shared Zod value lists |
 | Realtime messaging | Postgres Changes vs Broadcast tradeoff presented before Phase 4 |
-| TURN | Documented limitation in Phase 7; hosted provider only when needed |
+| TURN | Not configured (Phase 7): STUN only, from the API's `ICE_SERVERS`. A hosted TURN provider with short-lived credentials when needed (Phase 10) |
+| Calls | 1:1 voice only; the API owns the lifecycle; WebRTC carries the audio browser to browser |
+| Call signaling | Private `call:<id>` channel for the participants while ringing or active; the caller always offers; per-tab sessions and per-connection ids |
+| Call state to clients | `call.updated` on each participant's user channel (database trigger), plus `GET /api/calls/ongoing` after reconnects |
+| Call timing | Ring 45 s (server fallback 60 s); heartbeat 20 s; active call without heartbeat ended after 60 s; give-up after 30 s without a connection |
+| Busy | One call per person: starting while you or they are ringing or in a call answers `USER_BUSY` |
+| Microphone | Requested before ringing anyone; stopped as soon as the call ends in that tab |
+| Signed-in layout | Conversation list and calls moved above all signed-in pages (so calls ring everywhere) |
 | File storage | Two private Supabase Storage buckets; no browser policies; only the API (secret key) touches Storage |
 | Attachment uploads | Browser PUTs directly to a single-use signed upload URL (no file bytes through the API); the API verifies afterwards |
 | File type trust | Never the client's MIME type alone: the declared type must match the extension, the stored type and the file signature |
@@ -314,5 +374,16 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
   when idle, so cleanup happens after it wakes. A dedicated scheduled job is a Phase 10 option.
 - Backend tests run with at most 4 Vitest workers: each test file migrates its own in-memory
   Postgres, and ~16 at once starve each other past the setup timeout.
+- Calls need a direct path between the two browsers (STUN only). Some networks (symmetric NATs,
+  strict corporate firewalls) block that; without a TURN relay such calls stay on "Connecting…" and
+  end after 30 s.
+- There is no ringtone or system notification for incoming calls: the call panel and a
+  screen-reader announcement only, and only while Linka is open in a tab.
+- Two people ringing a third person at the same moment can both get through the busy check; the
+  third person's app then shows the first call and ignores the second, which rings out ("no answer").
+- Supabase does not attest the sender of call signals. Only the call's two participants can publish
+  on its channel, so a participant could only disrupt their own call.
+- An active call whose two tabs both vanish ends after up to 60 s (heartbeat); a reloaded page has
+  about 30 s to rejoin before the other side gives up.
 - Access tokens stay valid until they expire (default 1 hour) even after logout; logout revokes the
   refresh token.

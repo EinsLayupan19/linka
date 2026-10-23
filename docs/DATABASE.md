@@ -29,6 +29,8 @@ conversations ─────────┘
 | `0006_live_state_events`  | custom    | Triggers for list, receipt and membership events; user and live channel helpers and policies |
 | `0007_attachment_uploads` | generated | `attachment_status` enum, `message_type` value `attachment`; upload columns, constraints and indexes on `message_attachments`; `messages_content_length`; pending uploads visible only to their uploader (policy) |
 | `0008_attachment_storage` | custom    | `private.attachments_json()`; attachments in message payloads; message triggers deferred to commit; the two private Storage buckets |
+| `0009_call_lifecycle`     | generated | `calls.last_heartbeat_at`; `calls_ongoing_idx` for the stale-call sweep |
+| `0010_call_signaling`     | custom    | `private.call_json()`; `call.updated` trigger (deferred) to each participant's user channel; `private.can_access_call_topic()` and the `call:<id>` signaling policies |
 
 None are applied to a hosted database yet (no Supabase project).
 
@@ -184,9 +186,19 @@ those older than 24 hours (row first, then file).
 | `started_at`      | `timestamptz` null | When answered                  |
 | `ended_at`        | `timestamptz` null | `>= started_at`                |
 | `created_at`      | `timestamptz` |                                     |
+| `last_heartbeat_at` | `timestamptz` | Phase 7: last "still here" from a connected participant (default now) |
 
 `calls_one_ongoing_per_conversation_idx`: partial unique index, at most one `ringing` or `active`
 call per conversation.
+
+**Lifecycle (Phase 7).** Only the API writes these rows, with conditional updates
+(`WHERE status = 'ringing'`) so racing requests resolve to one outcome. Calls are 1:1 (two
+participants: the caller joined at start, the callee when answering). `ringing` older than 60 s
+becomes `missed`, and `active` without a heartbeat for 60 s becomes `ended`; this runs before
+starting, answering or listing calls and in a 30 s sweep, using `calls_ongoing_idx` (partial, on
+ringing and active calls). Ending a call sets `left_at` for everyone who joined. All timestamps
+come from the database clock, so `calls_end_after_start` and `call_participants_leave_after_join`
+hold even when the API's clock drifts.
 
 ### `call_participants`
 
@@ -226,6 +238,7 @@ are built by `private.message_json()` and `private.iso()` to match the shared co
 | `conversation_members_broadcast_added` / `_removed` | per statement (transition tables) | `conversation.changed` to each affected user; one `conversation.updated` per conversation |
 | `conversation_members_broadcast_role` | a role changed | `conversation.updated` |
 | `conversations_broadcast_renamed` | the name changed (not activity bumps) | `conversation.updated`; `conversation.changed` (updated) to each member |
+| `calls_broadcast_updated` (Phase 7) | insert, or a status change, on `calls` (deferred to commit; heartbeats do not publish) | `call.updated` (the full `Call`, participants included) on each participant's `user:<id>` |
 
 **Write cost.** `realtime.send()` stores each event in Supabase's `realtime.messages` log, which
 Supabase prunes after about 3 days. A new message therefore writes one row for the conversation
@@ -251,6 +264,7 @@ broken payload cannot block a write.
 | `message_attachments_uploader_client_idx` | Finding a retried upload start; prevents duplicates  |
 | `message_attachments_unattached_idx` (partial) | The unsent-upload sweep                             |
 | `calls_conversation_created_idx`        | Call history of a conversation                            |
+| `calls_ongoing_idx` (partial)           | Ringing and active calls: the stale-call sweep, busy checks |
 | `call_participants_user_id_idx`         | A user's calls; `ON DELETE CASCADE` from profiles         |
 | `profiles_username_prefix_idx` (`text_pattern_ops`) | Username search (`LIKE 'abc%'`); the unique index cannot serve `LIKE` under a non-C collation |
 
@@ -289,7 +303,14 @@ joining a private channel. No INSERT policy: browser clients cannot publish on t
   (`private.can_access_user_topic`). No INSERT: only the database publishes there.
 - `linka_conversation_members_receive_live` and `linka_conversation_members_publish_live`: `SELECT`
   and `INSERT` for broadcast and presence on `live:<uuid>`, for members
-  (`private.can_access_live_topic`). This is the only topic browser clients may publish on.
+  (`private.can_access_live_topic`).
+
+**Call channels (Phase 7).** `linka_call_participants_receive_signals` and
+`linka_call_participants_publish_signals`: `SELECT` and `INSERT` of broadcasts on exactly
+`call:<uuid>` when the user is a participant of that call, still a member of its conversation,
+and the call is `ringing` or `active` (`private.can_access_call_topic`, `SECURITY DEFINER`, empty
+`search_path`). Presence is not allowed there. `live:<id>` and `call:<id>` are the only topics
+browser clients may publish on; the audio itself is never stored or relayed by Linka.
 
 **Storage (Phase 6).** Buckets `attachments` and `avatars` are private and have **no**
 `storage.objects` policies for `anon` or `authenticated`: browsers cannot list, read or write them

@@ -1,5 +1,10 @@
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import {
+  CALL_SIGNAL_EVENT,
+  CALL_UPDATED_EVENT,
+  callSignalSchema,
+  callTopic,
+  callUpdatedEventSchema,
   CONVERSATION_ACTIVITY_EVENT,
   CONVERSATION_CHANGED_EVENT,
   CONVERSATION_READ_EVENT,
@@ -18,6 +23,8 @@ import {
   TYPING_EVENT,
   typingEventSchema,
   userTopic,
+  type Call,
+  type CallSignal,
   type ConversationActivityEvent,
   type ConversationChangedEvent,
   type ConversationReadEvent,
@@ -136,6 +143,8 @@ export interface UserSubscriptionHandlers extends ChannelLifecycle {
   onActivity: (event: ConversationActivityEvent) => void;
   onRead: (event: ConversationReadEvent) => void;
   onChanged: (event: ConversationChangedEvent) => void;
+  /** A call the user takes part in started or changed state (rings, answered, ended...). */
+  onCall?: (call: Call) => void;
 }
 
 /**
@@ -147,6 +156,7 @@ export function subscribeToUser(userId: string, handlers: UserSubscriptionHandle
     listen(channel, CONVERSATION_ACTIVITY_EVENT, conversationActivityEventSchema, handlers.onActivity, isLeft);
     listen(channel, CONVERSATION_READ_EVENT, conversationReadEventSchema, handlers.onRead, isLeft);
     listen(channel, CONVERSATION_CHANGED_EVENT, conversationChangedEventSchema, handlers.onChanged, isLeft);
+    listen(channel, CALL_UPDATED_EVENT, callUpdatedEventSchema, (call) => handlers.onCall?.(call), isLeft);
   });
   return leave;
 }
@@ -208,5 +218,50 @@ export function joinLiveConversation(conversationId: string, userId: string, han
       void live.channel.send({ type: 'broadcast', event: TYPING_EVENT, payload: { conversationId, userId, typing } });
     },
     leave: live.leave,
+  };
+}
+
+// --- call:<id> (WebRTC signaling) ----------------------------------------------------------
+
+export interface CallChannelHandlers extends ChannelLifecycle {
+  /** A validated signal for this call from another client (never our own: Supabase does not echo). */
+  onSignal: (signal: CallSignal) => void;
+}
+
+export interface CallChannel {
+  /** Broadcasts a signal. Returns false (and sends nothing) until the channel is joined. */
+  send: (signal: CallSignal) => boolean;
+  leave: () => void;
+}
+
+/**
+ * A call's signaling channel. Only that call's participants may join or publish, and only while
+ * it rings or is active (RLS on realtime.messages). Joined only for the duration of the call.
+ */
+export function joinCallChannel(callId: string, handlers: CallChannelHandlers): CallChannel {
+  let joined = false;
+  const call = joinPrivate(
+    callTopic(callId),
+    {},
+    {
+      onStatus: (status) => {
+        joined = status === 'live';
+        handlers.onStatus?.(status);
+      },
+      ...(handlers.onJoined ? { onJoined: handlers.onJoined } : {}),
+    },
+    (channel, isLeft) => {
+      listen(channel, CALL_SIGNAL_EVENT, callSignalSchema, (signal) => {
+        if (signal.callId === callId) handlers.onSignal(signal);
+      }, isLeft);
+    },
+  );
+  return {
+    send: (signal) => {
+      if (!joined || !call.isJoined()) return false;
+      void call.channel.send({ type: 'broadcast', event: CALL_SIGNAL_EVENT, payload: signal });
+      return true;
+    },
+    leave: call.leave,
   };
 }

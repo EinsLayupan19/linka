@@ -2,6 +2,7 @@ import { Route, Routes } from 'react-router';
 import { RedirectIfSignedIn, RequireAuth, RequireProfile } from './components/auth/RouteGuards';
 import { AppShell } from './components/layout/AppShell';
 import { AuthLayout } from './components/layout/AuthLayout';
+import { SignedInLayout } from './components/layout/SignedInLayout';
 import { Chat } from './pages/Chat';
 import { Chats, ChatsHome } from './pages/Chats';
 import { ForgotPassword } from './pages/ForgotPassword';
@@ -34,13 +35,16 @@ export function App() {
           <Route path="/onboarding" element={<Onboarding />} />
         </Route>
         <Route element={<RequireProfile />}>
-          <Route element={<AppShell />}>
-            <Route element={<Chats />}>
-              <Route index element={<ChatsHome />} />
-              <Route path="/conversations/new" element={<NewChat />} />
-              <Route path="/conversations/:conversationId" element={<Chat />} />
+          {/* The conversation list and calls live here, so a call rings on every signed-in page. */}
+          <Route element={<SignedInLayout />}>
+            <Route element={<AppShell />}>
+              <Route element={<Chats />}>
+                <Route index element={<ChatsHome />} />
+                <Route path="/conversations/new" element={<NewChat />} />
+                <Route path="/conversations/:conversationId" element={<Chat />} />
+              </Route>
+              <Route path="/profile" element={<Profile />} />
             </Route>
-            <Route path="/profile" element={<Profile />} />
           </Route>
         </Route>
       </Route>

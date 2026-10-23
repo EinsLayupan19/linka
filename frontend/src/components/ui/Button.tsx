@@ -12,12 +12,15 @@ const base =
 // Exported so links that look like buttons (e.g. "Back to home") match exactly.
 export const buttonClassName = `${base} bg-accent text-on-accent hover:bg-accent-hover`;
 export const secondaryButtonClassName = `${base} border border-line bg-surface text-ink hover:border-ink-muted`;
+/** Destructive actions (end or decline a call). The status color, not a second accent. */
+export const dangerButtonClassName = `${base} bg-danger text-on-accent hover:opacity-90`;
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary';
+  variant?: 'primary' | 'secondary' | 'danger';
 }
 
 export function Button({ className = '', type = 'button', variant = 'primary', ...props }: ButtonProps) {
-  const variantClassName = variant === 'primary' ? buttonClassName : secondaryButtonClassName;
+  const variantClassName =
+    variant === 'primary' ? buttonClassName : variant === 'danger' ? dangerButtonClassName : secondaryButtonClassName;
   return <button type={type} className={`${variantClassName} ${className}`} {...props} />;
 }

@@ -7,6 +7,7 @@ import { MessageList } from '../components/chat/MessageList';
 import { TypingIndicator } from '../components/chat/TypingIndicator';
 import { Avatar } from '../components/ui/Avatar';
 import { Button } from '../components/ui/Button';
+import { useCalls } from '../hooks/useCalls';
 import { useChats } from '../hooks/useChats';
 import { useConversationMessages } from '../hooks/useConversationMessages';
 import { useLiveConversation } from '../hooks/useLiveConversation';
@@ -35,6 +36,7 @@ export function Chat() {
 function ConversationScreen({ conversationId }: { conversationId: string }) {
   const { profile } = useProfile();
   const { list, applyMessage, applyRead, delivery } = useChats();
+  const calls = useCalls();
 
   // Header details: shown from the list right away if known, then fetched fresh, and fetched
   // again whenever the conversation changes (members, roles, name).
@@ -151,12 +153,24 @@ function ConversationScreen({ conversationId }: { conversationId: string }) {
               size="sm"
               src={conversation.type === 'direct' ? otherMember(conversation, profile.id)?.avatarUrl : null}
             />
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <h1 className="truncate font-semibold">{title}</h1>
               {subtitle && (
                 <p className={`truncate text-xs ${subtitle === 'Online' ? 'text-accent' : 'text-ink-muted'}`}>{subtitle}</p>
               )}
             </div>
+            {/* Voice calls are 1:1. Disabled while any call is starting, ringing or connected. */}
+            {conversation.type === 'direct' && otherMember(conversation, profile.id) && (
+              <Button
+                variant="secondary"
+                onClick={() => void calls.startCall(conversationId)}
+                disabled={calls.busy}
+                aria-label={`Call ${title}`}
+                className="h-9 shrink-0 px-3"
+              >
+                Call
+              </Button>
+            )}
           </>
         ) : (
           <span aria-hidden="true" className="block h-5 w-40 rounded-sm bg-skeleton" />

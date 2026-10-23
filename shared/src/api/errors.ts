@@ -33,6 +33,12 @@ export const ErrorCode = {
   /** The owner must transfer ownership before leaving. */
   OwnerCannotLeave: 'OWNER_CANNOT_LEAVE',
   CallInProgress: 'CALL_IN_PROGRESS',
+  /** You or the person you are calling is already in another call. */
+  UserBusy: 'USER_BUSY',
+  /** The call is no longer ringing or active (answered elsewhere, declined, missed or ended). */
+  CallEnded: 'CALL_ENDED',
+  /** Calls are 1:1 for now: groups cannot be called. */
+  CallNotSupported: 'CALL_NOT_SUPPORTED',
   /** A read marker update would move it backwards (e.g. a stale tab); nothing changed. */
   MarkerBehind: 'MARKER_BEHIND',
   AttachmentNotFound: 'ATTACHMENT_NOT_FOUND',

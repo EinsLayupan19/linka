@@ -74,12 +74,12 @@ refresh token, so it cannot be renewed.
 
 | Folder / file          | Responsibility                                                      |
 | ---------------------- | ------------------------------------------------------------------- |
-| `server.ts`            | Starts the HTTP server and the unsent-upload sweep, graceful shutdown |
+| `server.ts`            | Starts the HTTP server, the unsent-upload and stale-call sweeps, graceful shutdown |
 | `app.ts`               | Builds the Express app (no `listen`), so tests can use it directly |
 | `config/`              | Loads and validates environment variables with Zod (fails fast)     |
 | `middleware/`          | Cross-cutting concerns: `requireAuth`, 404 handler, error handler   |
-| `routes/`              | URL -> handler mapping. Kept thin (`health`, `users`, `conversations`, `attachments`) |
-| `services/`            | Business logic: `auth` (tokens), `profiles`, `conversations`, `membership`, `conversationPermissions`, `messages`, `markers`, `attachments`, `storage` (the only Storage client), `media` (avatar URLs), `calls`, `health` |
+| `routes/`              | URL -> handler mapping. Kept thin (`health`, `users`, `conversations`, `attachments`, `calls`) |
+| `services/`            | Business logic: `auth` (tokens), `profiles`, `conversations`, `membership`, `conversationPermissions`, `messages`, `markers`, `attachments`, `storage` (the only Storage client), `media` (avatar URLs), `calls` (call lifecycle), `health` |
 | `validation/`          | `parseBody`: shared Zod schema -> parsed data or 400 with field errors |
 | `db/`                  | Drizzle client, schema and migrations                               |
 | `utils/`               | Small helpers (`AppError`, `cursor`, `fileSignature`)               |
@@ -137,8 +137,8 @@ admin). 1:1 conversations have no roles to manage and cannot be left or changed.
 
 **Authorization is centralized.** Every operation inside a conversation goes through
 `requireMembership()` (404 for non-members) and then the role rules above. The message and call
-services (`services/messages.ts`, `services/calls.ts`) use the same check. Calls have no routes
-yet (calling phases).
+services (`services/messages.ts`, `services/calls.ts`) use the same check. Calls are described in
+[Voice calls](#voice-calls-phase-7).
 
 **API (Phase 4): messages.**
 
@@ -162,6 +162,21 @@ characters. Invalid `limit` or `before` answers 400 with a field error.
 
 Someone else's upload, or a malformed id, answers 404 `ATTACHMENT_NOT_FOUND`. Storage failures
 answer 503 without details.
+
+**API (Phase 7): calls.** All require a token; `:callId` is a UUID (anything else answers 404).
+
+| Method | Path | Body | Who / result |
+| ------ | ---- | ---- | ------------ |
+| POST   | `/api/calls` | `{ conversationId, type: 'voice' }` | A member of a 1:1 conversation; 201 ringing call. 400 `CALL_NOT_SUPPORTED` (group), 409 `CALL_IN_PROGRESS` / `USER_BUSY` |
+| GET    | `/api/calls/ongoing` |  | 200 `{ calls }`: your ringing and active calls |
+| GET    | `/api/calls/ice-servers` |  | 200 `{ iceServers }` (STUN/TURN for WebRTC) |
+| GET    | `/api/calls/:callId` |  | Members of its conversation |
+| POST   | `/api/calls/:callId/accept` |  | The callee; 200 active (repeatable); 403 for the caller; 409 `CALL_ENDED` |
+| POST   | `/api/calls/:callId/decline` |  | The callee; 200 declined (repeatable) |
+| POST   | `/api/calls/:callId/end` |  | Either participant; ends, cancels or refuses; repeatable |
+| POST   | `/api/calls/:callId/heartbeat` |  | A participant; 204, or 409 `CALL_ENDED` |
+
+Someone who is not in the call gets 404 `NOT_FOUND` (the call's existence is never revealed).
 
 **Limits.** Groups have at most 100 members (bounded member lists and realtime fan-out).
 Conversation lists return the 50 most recently active (`GET /api/conversations` is structured so a
@@ -257,13 +272,14 @@ Realtime), and channel access that is cached per connection (below).
 
 ### Channels
 
-At most **three channels per signed-in user**, whatever the number of conversations:
+At most **four channels per signed-in user**, whatever the number of conversations:
 
 | Topic                | Lifetime                    | Who joins          | Who publishes | Events |
 | -------------------- | --------------------------- | ------------------ | ------------- | ------ |
-| `user:<userId>`      | While the chat screen is open | **that user only** | database only | `conversation.activity`, `conversation.read`, `conversation.changed` |
+| `user:<userId>`      | While signed in (any page, since Phase 7) | **that user only** | database only | `conversation.activity`, `conversation.read`, `conversation.changed`, `call.updated` |
 | `conversation:<id>`  | While that conversation is open | members        | database only | `message.created`, `receipt.updated`, `conversation.updated` |
 | `live:<id>`          | While that conversation is open | members        | members       | Presence, `typing` |
+| `call:<callId>`      | During a call (Phase 7)     | that call's participants, while it rings or is active | those participants | `signal` (WebRTC) |
 
 Every payload has a Zod contract in `@linka/shared` (`realtime/events.ts`) and is validated by the
 client before use; invalid events are dropped.
@@ -285,6 +301,8 @@ Policies on `realtime.messages` (migration `0006_live_state_events`), all for `a
   clients may publish on.
 - `conversation:<id>`: unchanged from Phase 4 (members receive broadcasts; nobody publishes;
   presence is not allowed there).
+- `call:<callId>` (Phase 7, migration `0010_call_signaling`): `SELECT` and `INSERT` of broadcasts
+  for that call's participants while it rings or is active (`private.can_access_call_topic`).
 
 The client joins `live:<id>` only after the conversation loaded (membership confirmed), so it never
 probes channels it may not join.
@@ -470,6 +488,108 @@ that route), checks type, size and signature, stores it under a new random name 
 the old one; `DELETE /api/users/me/avatar` removes it. Every response that includes a user
 (profile, members, search) carries a fresh signed `avatarUrl`, signed in one batch per response;
 if signing fails the user simply shows their initial.
+
+## Voice calls (Phase 7)
+
+1:1 voice calls between the two members of a direct conversation. Group calls and video come
+later (video is Phase 8; the call contract already has a `type`).
+
+```text
+Browser A ──API──> start / accept / decline / end / heartbeat      (call state, authorized, stored)
+Database ──user:<id>──> call.updated to both people                (rings, answered, over)
+Browser A <──call:<callId>──> Browser B   offer / answer / ICE      (signaling, participants only)
+Browser A <════════ WebRTC (DTLS-SRTP) ════════> Browser B          (the audio; never via Linka)
+```
+
+### Who decides what
+
+| Concern | Owner |
+| --- | --- |
+| Whether a call may start, who is in it, its state | The API (`services/calls.ts`), the only writer of `calls` / `call_participants` |
+| Telling both people about state changes | A database trigger publishing `call.updated` on each participant's `user:<id>` |
+| Finding each other (SDP, ICE) | The two browsers, over the call's private `call:<callId>` channel |
+| Carrying audio | WebRTC, browser to browser (a TURN relay later); Express never sees media |
+
+### Lifecycle (server-authoritative)
+
+```text
+ringing --accept (callee)----------------> active --end (either)--> ended
+ringing --decline / end (callee)---------> declined
+ringing --end (caller) / ring timeout----> missed
+active  --no heartbeat for 60 s----------> ended
+```
+
+- **Start** (`POST /api/calls`): a member of a 1:1 conversation; refused for groups
+  (`CALL_NOT_SUPPORTED`), when this conversation already has a call (`CALL_IN_PROGRESS`, which is
+  also what the second person gets when both call each other at once), and when the caller or the
+  callee is already ringing or in another call (`USER_BUSY`).
+- **Transitions** are conditional updates (`WHERE status = 'ringing'`), so races (answer vs.
+  cancel, two tabs answering) resolve to exactly one outcome; repeating a transition that already
+  happened returns the call unchanged, so clients retry safely. All timestamps use the database
+  clock.
+- **Ring timeout**: the caller stops after 45 s (`CALL_RING_TIMEOUT_SECONDS`), the callee's
+  ringing stops on its own too, and the server marks a call still ringing after 60 s missed.
+- **Heartbeats**: every connected tab reports every 20 s; an active call nobody reported on for
+  60 s (both tabs closed, both offline) is ended by the server, so stale calls never block new
+  ones. The API applies these expiries before starting, answering or listing calls, and a sweep in
+  the API process (every 30 s) applies them otherwise, so `call.updated` still reaches clients.
+
+### Signaling (`call:<callId>`)
+
+Private channel, joined only for the duration of the call. Only that call's participants may join
+or publish, and only while it rings or is active (`private.can_access_call_topic`); broadcast only,
+no presence. Messages are validated against `callSignalSchema`:
+
+- Every browser tab in a call has a random **session**; every message carries it, and all but
+  `ready`/`media` name the session they are for. Each `RTCPeerConnection` also has a
+  **connection** id. So a reloaded page, a call moved to another tab, or two messages that cross
+  can never mix two connections: the old session gets `bye` and stops; answers and candidates
+  for an old connection are ignored.
+- `ready` on every (re)join; the **caller always offers** in reply to the callee's `ready` (no
+  glare); ICE candidates are trickled in batches (100 ms) to stay under Realtime's message limits.
+- **Recovery**: a dropped connection shows "Reconnecting…"; after 6 s (or at once on `failed`)
+  the caller does an ICE restart on the same connection (the callee asks for one with `ready`). If
+  it is not connected again within 30 s, the call ends ("connection was lost").
+- **Why a per-call topic** (not `live:<conversationId>`): it closes when the call ends, admits
+  exactly the participants, and keeps signaling apart from typing. Supabase does not attest who
+  sent a client broadcast, but on `call:<id>` the only possible senders are the two participants
+  (and their own tabs, which are ignored), so a forged message can only affect a call the sender
+  is already in.
+
+### Client structure
+
+| Module | Responsibility |
+| --- | --- |
+| `services/webrtc.ts` | One `RTCPeerConnection`: offer/answer, queued remote candidates, ICE restart, simplified states. No React, no Linka API |
+| `services/callSession.ts` | The signaling protocol above, on top of `webrtc.ts` and `joinCallChannel` |
+| `services/calls.ts`, `services/microphone.ts` | Lifecycle API calls; microphone access with readable errors |
+| `hooks/useCalls.ts` | The call state machine for the whole app (one call at a time), timers, cleanup |
+| `components/call/CallPanel.tsx` | Incoming / calling / connecting / in call / reconnecting / ended UI, remote audio |
+| `components/layout/SignedInLayout.tsx` | Hosts the conversation list and calls for every signed-in page |
+
+- The microphone is requested **before** ringing anyone (a blocked microphone never leaves the
+  other person waiting) and stopped the moment a call ends in this tab.
+- Every state change from the server goes through one `apply(call)` function, from API
+  responses, `call.updated` events and `GET /api/calls/ongoing` (on start and after every
+  user-channel reconnect), so missed events cannot leave a stale call on screen.
+- A call answered in another tab shows "On this call in another tab" with **Join here**; a
+  reloaded page in an active call shows the same and can rejoin (the audio needs the click:
+  browsers block autoplay otherwise). Closing a page while our call still rings cancels it
+  (`keepalive` request); an active call is not ended on close, so a reload can rejoin it.
+- Mute disables the local track (no renegotiation) and tells the other side (`media`).
+- **ICE servers** come from the API (`GET /api/calls/ice-servers`, server env `ICE_SERVERS`,
+  default one public STUN server). No TURN relay is configured yet: calls between two networks
+  that block direct connections (some corporate networks, symmetric NATs) will not connect. A TURN
+  provider with short-lived credentials can be added behind the same endpoint without frontend
+  changes (Phase 10 decision).
+
+### What cannot be unit-tested
+
+Real WebRTC (ICE gathering, NAT traversal, DTLS, audio devices, echo cancellation, autoplay
+policies, browser permission prompts) and Supabase's real WebSocket delivery. Tests use a
+`RTCPeerConnection` stand-in that follows the offer/answer state machine, fake media tracks, and
+the Realtime stand-in; database tests check the channel policy and trigger on PGlite. Two-browser
+checks on a real Supabase project are listed in DEVELOPMENT_STATUS.md.
 
 ## Frontend (`frontend/src`)
 

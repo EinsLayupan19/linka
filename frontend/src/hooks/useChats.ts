@@ -3,6 +3,7 @@ import {
   compareMessages,
   type Conversation,
   type ConversationActivityEvent,
+  type Call,
   type ConversationChangedEvent,
   type Message,
 } from '@linka/shared';
@@ -47,7 +48,22 @@ const myMember = (conversation: Conversation, myUserId: string) =>
  * Unread counts come from the server; live events only adjust them, idempotently (each message
  * id counts once), and every (re)join refetches the authoritative list.
  */
-export function useConversationList(myUserId: string, activeConversationId: string | null): ChatsContextValue {
+/** Other things the user channel carries, for whoever needs them (calls). */
+export interface UserChannelListeners {
+  onCall?: (call: Call) => void;
+  /** After every (re)join of the user channel. */
+  onJoined?: () => void;
+}
+
+export function useConversationList(
+  myUserId: string,
+  activeConversationId: string | null,
+  listeners: UserChannelListeners = {},
+): ChatsContextValue {
+  const listenersRef = useRef(listeners);
+  useEffect(() => {
+    listenersRef.current = listeners;
+  });
   const [list, setList] = useState<ConversationListState>({ status: 'loading' });
   const [listStatus, setListStatus] = useState<LiveStatus>('connecting');
   const [attempt, setAttempt] = useState(0);
@@ -198,9 +214,13 @@ export function useConversationList(myUserId: string, activeConversationId: stri
       },
       onRead: (event) => applyRead(event.conversationId, event.lastReadAt),
       onChanged,
+      onCall: (call) => listenersRef.current.onCall?.(call),
       onStatus: setListStatus,
       // Events sent while disconnected are not replayed: start from the server again.
-      onJoined: refresh,
+      onJoined: () => {
+        refresh();
+        listenersRef.current.onJoined?.();
+      },
     });
   }, [myUserId, showMessage, applyRead, onChanged, refresh, delivery]);
 
@@ -209,9 +229,9 @@ export function useConversationList(myUserId: string, activeConversationId: stri
 
 export const ChatsContext = createContext<ChatsContextValue | null>(null);
 
-/** The conversation list, shared by the chat pages. Only available inside <Chats>. */
+/** The conversation list, shared by the signed-in pages (see SignedInLayout). */
 export function useChats(): ChatsContextValue {
   const value = useContext(ChatsContext);
-  if (!value) throw new Error('useChats must be used inside <Chats>');
+  if (!value) throw new Error('useChats must be used inside the signed-in layout');
   return value;
 }

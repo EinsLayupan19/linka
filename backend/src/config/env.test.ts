@@ -58,6 +58,24 @@ describe('parseEnv', () => {
     expect(() => parseEnv({ SUPABASE_SECRET_KEY: 'short' })).toThrow(/SUPABASE_SECRET_KEY/);
   });
 
+  it('defaults ICE_SERVERS to a public STUN server and accepts a JSON list', () => {
+    expect(parseEnv({}).ICE_SERVERS).toEqual([{ urls: 'stun:stun.l.google.com:19302' }]);
+    expect(parseEnv({ ICE_SERVERS: '' }).ICE_SERVERS).toEqual([{ urls: 'stun:stun.l.google.com:19302' }]);
+    const turn = '[{"urls":["turn:turn.example.com:3478"],"username":"u","credential":"s3cret-turn"}]';
+    expect(parseEnv({ ICE_SERVERS: turn }).ICE_SERVERS).toEqual(JSON.parse(turn));
+  });
+
+  it('rejects invalid ICE_SERVERS without echoing them', () => {
+    for (const value of ['not json s3cret-turn', '[]', '[{"urls":"http://s3cret-turn.example.com"}]']) {
+      expect(() => parseEnv({ ICE_SERVERS: value })).toThrow(
+        expect.objectContaining({ message: expect.stringMatching(/ICE_SERVERS/) }),
+      );
+      expect(() => parseEnv({ ICE_SERVERS: value })).toThrow(
+        expect.objectContaining({ message: expect.not.stringContaining('s3cret-turn') }),
+      );
+    }
+  });
+
   it('never includes variable values in the error message', () => {
     const secret = 'mysql://admin:SuperSecret123@host/db';
 

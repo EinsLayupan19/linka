@@ -49,3 +49,12 @@ export function formatLastSeen(iso: string, now = new Date()): string {
 export function isSameDay(a: string, b: string): boolean {
   return startOfDay(new Date(a)).getTime() === startOfDay(new Date(b)).getTime();
 }
+
+/** A call's length: "0:42", "12:05", "1:02:09". */
+export function formatCallDuration(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = String(total % 60).padStart(2, '0');
+  return hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${seconds}` : `${minutes}:${seconds}`;
+}

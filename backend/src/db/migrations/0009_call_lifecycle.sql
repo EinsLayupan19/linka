@@ -1,0 +1,2 @@
+ALTER TABLE "calls" ADD COLUMN "last_heartbeat_at" timestamp with time zone DEFAULT now() NOT NULL;--> statement-breakpoint
+CREATE INDEX "calls_ongoing_idx" ON "calls" USING btree ("status") WHERE "calls"."status" in ('ringing', 'active');

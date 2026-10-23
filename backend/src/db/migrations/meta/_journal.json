@@ -64,6 +64,20 @@
       "when": 1792631901558,
       "tag": "0008_attachment_storage",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792688645242,
+      "tag": "0009_call_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792688681542,
+      "tag": "0010_call_signaling",
+      "breakpoints": true
     }
   ]
 }

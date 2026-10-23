@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { callSchema } from '../calls/call.js';
 import { messageSchema } from '../messages/message.js';
 
 /*
@@ -8,7 +9,8 @@ import { messageSchema } from '../messages/message.js';
  * | --------------------- | --------------- | -------------- | ------------------------------------------------- |
  * | conversation:<id>     | members         | database only  | message.created, receipt.updated, conversation.updated |
  * | live:<id>             | members         | members        | typing (broadcast), presence                      |
- * | user:<userId>         | that user only  | database only  | conversation.activity, conversation.read, conversation.changed |
+ * | user:<userId>         | that user only  | database only  | conversation.activity, conversation.read, conversation.changed, call.updated |
+ * | call:<callId>         | the call's participants, while it rings or is active | those participants | signal (WebRTC offer/answer/ICE) |
  *
  * Server events and member-published events live on different topics on purpose: Supabase
  * authorizes publishing per channel join, not per event, so a channel members may publish on
@@ -18,6 +20,7 @@ import { messageSchema } from '../messages/message.js';
 export const conversationTopic = (conversationId: string) => `conversation:${conversationId}`;
 export const liveTopic = (conversationId: string) => `live:${conversationId}`;
 export const userTopic = (userId: string) => `user:${userId}`;
+export const callTopic = (callId: string) => `call:${callId}`;
 
 const timestamp = z.iso.datetime();
 
@@ -85,3 +88,56 @@ export const conversationChangedEventSchema = z.object({
   change: z.enum(['added', 'removed', 'updated']),
 });
 export type ConversationChangedEvent = z.infer<typeof conversationChangedEventSchema>;
+
+// --- user:<userId>: calls (published by the database) ---
+
+/** A call the user takes part in started or changed state. Payload: a Call. */
+export const CALL_UPDATED_EVENT = 'call.updated';
+export const callUpdatedEventSchema = callSchema;
+
+// --- call:<callId> (published by the call's participants) ---
+
+/**
+ * WebRTC signaling. Media never passes through Linka: these messages only let the two browsers
+ * find each other. Each browser tab in a call has its own random `session`, so a call moved to
+ * another tab (or a reloaded page) never mixes with the old one: messages carry the sender's
+ * session and, except `ready` and `media`, the session they are meant for.
+ *
+ * - ready: "this tab is in the call and listening" (sent on every (re)join)
+ * - offer / answer: SDP, the caller always offers. `connection` names the RTCPeerConnection: a new
+ *   one means "start over", the same one is a renegotiation (ICE restart)
+ * - ice: candidates for that connection, batched to stay well under Realtime's message limits
+ * - media: microphone muted or not (shown to the other person)
+ * - bye: "your session has been replaced; stop"
+ */
+export const CALL_SIGNAL_EVENT = 'signal';
+export const CALL_SIGNAL_MAX_CANDIDATES = 50;
+
+const callSessionSchema = z.string().regex(/^[A-Za-z0-9-]{8,64}$/, 'Invalid session.');
+const signalBase = { callId: z.uuid(), from: z.uuid(), session: callSessionSchema };
+const sdpSchema = z.string().min(1).max(100_000);
+
+export const iceCandidateSchema = z.object({
+  candidate: z.string().max(2000),
+  sdpMid: z.string().max(64).nullable().optional(),
+  sdpMLineIndex: z.number().int().min(0).max(64).nullable().optional(),
+  usernameFragment: z.string().max(256).nullable().optional(),
+});
+
+export const callSignalSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('ready'), ...signalBase }),
+  z.object({ kind: z.literal('offer'), ...signalBase, to: callSessionSchema, connection: callSessionSchema, sdp: sdpSchema }),
+  z.object({ kind: z.literal('answer'), ...signalBase, to: callSessionSchema, connection: callSessionSchema, sdp: sdpSchema }),
+  z.object({
+    kind: z.literal('ice'),
+    ...signalBase,
+    to: callSessionSchema,
+    connection: callSessionSchema,
+    candidates: z.array(iceCandidateSchema).min(1).max(CALL_SIGNAL_MAX_CANDIDATES),
+  }),
+  z.object({ kind: z.literal('media'), ...signalBase, muted: z.boolean() }),
+  z.object({ kind: z.literal('bye'), ...signalBase, to: callSessionSchema }),
+]);
+
+export type CallSignal = z.infer<typeof callSignalSchema>;
+export type IceCandidate = z.infer<typeof iceCandidateSchema>;

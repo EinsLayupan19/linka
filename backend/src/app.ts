@@ -1,17 +1,19 @@
 import cors from 'cors';
 import express, { type Express } from 'express';
 import helmet from 'helmet';
-import type { DatabaseStatus } from '@linka/shared';
+import type { DatabaseStatus, IceServer } from '@linka/shared';
 import { env } from './config/env.js';
 import { db } from './db/client.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
 import { attachmentsRouter } from './routes/attachments.js';
+import { callsRouter } from './routes/calls.js';
 import { conversationsRouter } from './routes/conversations.js';
 import { healthRouter } from './routes/health.js';
 import { usersRouter } from './routes/users.js';
 import { createAttachmentStore, type AttachmentStore } from './services/attachments.js';
 import { createSupabaseTokenVerifier, type VerifyAccessToken } from './services/auth.js';
+import { createCallStore, type CallStore } from './services/calls.js';
 import { createConversationStore, type ConversationStore } from './services/conversations.js';
 import { checkDatabase } from './services/health.js';
 import { createMarkerStore, type MarkerStore } from './services/markers.js';
@@ -31,6 +33,9 @@ export interface AppDependencies {
   markers: MarkerStore | null;
   /** null without DATABASE_URL; uploads answer 503 without storage (SUPABASE_SECRET_KEY). */
   attachments: AttachmentStore | null;
+  calls: CallStore | null;
+  /** STUN/TURN servers handed to browsers for WebRTC (ICE_SERVERS). */
+  iceServers: IceServer[];
 }
 
 /** Private Storage, only when the server-only secret key is configured. */
@@ -47,6 +52,8 @@ function defaultDependencies(): AppDependencies {
     messages: db ? createMessageStore(db) : null,
     markers: db ? createMarkerStore(db) : null,
     attachments: db ? createAttachmentStore(db, storage) : null,
+    calls: db ? createCallStore(db) : null,
+    iceServers: env.ICE_SERVERS,
   };
 }
 
@@ -66,6 +73,7 @@ export function createApp(overrides: Partial<AppDependencies> = {}): Express {
   app.use('/api/users', usersRouter(deps));
   app.use('/api/conversations', conversationsRouter(deps));
   app.use('/api/attachments', attachmentsRouter(deps));
+  app.use('/api/calls', callsRouter(deps));
 
   app.use(notFound);
   app.use(errorHandler);
