@@ -7,6 +7,20 @@
     <meta name="description" content="Linka: real-time messaging and calls." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Linka</title>
+    <script>
+      (() => {
+        let preference = 'system';
+        try {
+          const stored = localStorage.getItem('linka-theme');
+          if (stored === 'light' || stored === 'dark' || stored === 'system') preference = stored;
+        } catch {
+          // The page can still follow the system theme when storage is unavailable.
+        }
+        const systemDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches === true;
+        document.documentElement.dataset.theme = preference === 'system' ? (systemDark ? 'dark' : 'light') : preference;
+        document.documentElement.dataset.themePreference = preference;
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

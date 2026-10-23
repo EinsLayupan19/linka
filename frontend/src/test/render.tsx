@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 import { MemoryRouter, useLocation } from 'react-router';
 import type { Profile } from '@linka/shared';
 import { AuthContext, type AuthState } from '../hooks/useAuth';
+import { ThemeProvider } from '../components/theme/ThemeProvider';
 import { fakeSession, TEST_USER_ID } from './supabaseMock';
 
 export const signedIn = (): AuthState => ({ status: 'signed_in', session: fakeSession() });
@@ -30,10 +31,12 @@ function CurrentPath() {
 export function renderWithAuth(ui: ReactElement, { path = '/', auth = signedIn() }: { path?: string; auth?: AuthState } = {}) {
   return render(
     <AuthContext.Provider value={{ state: auth }}>
-      <MemoryRouter initialEntries={[path]}>
-        {ui}
-        <CurrentPath />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={[path]}>
+          {ui}
+          <CurrentPath />
+        </MemoryRouter>
+      </ThemeProvider>
     </AuthContext.Provider>,
   );
 }
