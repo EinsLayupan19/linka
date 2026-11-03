@@ -36,11 +36,13 @@ export interface CallSessionOptions {
   myUserId: string;
   peerUserId: string;
   role: 'caller' | 'callee';
+  video?: boolean;
   iceServers: RTCIceServer[];
   localStream: MediaStream;
   onRemoteStream: (stream: MediaStream) => void;
   onState: (state: CallConnectionState) => void;
   onPeerMuted: (muted: boolean) => void;
+  onPeerCameraEnabled?: (enabled: boolean) => void;
   /** This call continues in another tab (or a reloaded page) of the same user. */
   onReplaced: () => void;
   /** For tests. */
@@ -52,6 +54,8 @@ export interface CallSessionOptions {
 export interface CallSession {
   readonly sessionId: string;
   setMuted: (muted: boolean) => void;
+  setCameraEnabled: (enabled: boolean) => void;
+  replaceVideoTrack: (track: MediaStreamTrack | null) => Promise<void>;
   close: () => void;
 }
 
@@ -63,12 +67,17 @@ export function startCallSession(options: CallSessionOptions): CallSession {
   let connectionId = '';
   let lastOfferAt = -Infinity;
   let muted = false;
+  let cameraEnabled = options.localStream.getVideoTracks().some((track) => track.enabled && track.readyState !== 'ended');
   let closed = false;
   let state: CallConnectionState = 'connecting';
   let candidates: IceCandidate[] = [];
   const timers = { candidates: undefined as Timer, lost: undefined as Timer, restart: undefined as Timer, ready: undefined as Timer };
 
   const base = () => ({ callId: options.callId, from: options.myUserId, session: sessionId });
+
+  function sendMediaState() {
+    if (!closed) channel.send({ kind: 'media', ...base(), muted, cameraEnabled });
+  }
 
   function setState(next: CallConnectionState) {
     if (closed || next === state) return;
@@ -132,6 +141,7 @@ export function startCallSession(options: CallSessionOptions): CallSession {
     peer = createPeer({
       iceServers: options.iceServers,
       localStream: options.localStream,
+      video: options.video,
       sendDescription: (kind, sdp) => {
         if (peerSession) channel.send({ kind, ...base(), to: peerSession, connection: id, sdp });
       },
@@ -177,7 +187,7 @@ export function startCallSession(options: CallSessionOptions): CallSession {
       case 'ready': {
         const changed = adopt(signal.session);
         // Tell the (new) other side whether we are muted.
-        if (changed && muted) channel.send({ kind: 'media', ...base(), muted });
+        if (changed) sendMediaState();
         const connected = peer?.state === 'connected';
         if (options.role === 'caller') {
           // A repeated ready while our offer is still on its way is not a reason to start over.
@@ -210,7 +220,10 @@ export function startCallSession(options: CallSessionOptions): CallSession {
         if (signal.session === peerSession && signal.connection === connectionId) await peer?.addRemoteCandidates(signal.candidates);
         return;
       case 'media':
-        if (signal.session === peerSession) options.onPeerMuted(signal.muted);
+        if (signal.session === peerSession) {
+          options.onPeerMuted(signal.muted);
+          options.onPeerCameraEnabled?.(signal.cameraEnabled ?? true);
+        }
         return;
       case 'bye':
         // Our session was replaced by another tab of ours.
@@ -223,7 +236,10 @@ export function startCallSession(options: CallSessionOptions): CallSession {
   const channel = join(options.callId, {
     onSignal: (signal) => void handle(signal),
     // Every (re)join: say we are here. Signals sent while disconnected are not replayed.
-    onJoined: sendReady,
+    onJoined: () => {
+      sendReady();
+      sendMediaState();
+    },
   });
   if (options.role === 'callee') armLost(); // the caller should make contact soon after we answered
 
@@ -242,7 +258,14 @@ export function startCallSession(options: CallSessionOptions): CallSession {
     setMuted(next) {
       muted = next;
       for (const track of options.localStream.getAudioTracks()) track.enabled = !next;
-      if (!closed) channel.send({ kind: 'media', ...base(), muted: next });
+      sendMediaState();
+    },
+    setCameraEnabled(next) {
+      cameraEnabled = next;
+      sendMediaState();
+    },
+    async replaceVideoTrack(track) {
+      await peer?.replaceVideoTrack(track);
     },
     close,
   };

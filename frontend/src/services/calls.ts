@@ -1,4 +1,4 @@
-import { callListSchema, callSchema, iceServersResponseSchema, type Call, type IceServer } from '@linka/shared';
+import { callListSchema, callSchema, iceServersResponseSchema, type Call, type CallType, type IceServer } from '@linka/shared';
 import { z } from 'zod';
 import { apiRequest } from '../lib/api';
 
@@ -9,8 +9,8 @@ import { apiRequest } from '../lib/api';
 
 const callPath = (callId: string) => `/api/calls/${encodeURIComponent(callId)}`;
 
-export function startCall(conversationId: string): Promise<Call> {
-  return apiRequest('/api/calls', callSchema, { auth: true, method: 'POST', json: { conversationId, type: 'voice' } });
+export function startCall(conversationId: string, type: CallType = 'voice'): Promise<Call> {
+  return apiRequest('/api/calls', callSchema, { auth: true, method: 'POST', json: { conversationId, type } });
 }
 
 export function acceptCall(callId: string): Promise<Call> {

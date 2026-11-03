@@ -107,7 +107,7 @@ export const callUpdatedEventSchema = callSchema;
  * - offer / answer: SDP, the caller always offers. `connection` names the RTCPeerConnection: a new
  *   one means "start over", the same one is a renegotiation (ICE restart)
  * - ice: candidates for that connection, batched to stay well under Realtime's message limits
- * - media: microphone muted or not (shown to the other person)
+ * - media: microphone mute and optional camera state (shown to the other person)
  * - bye: "your session has been replaced; stop"
  */
 export const CALL_SIGNAL_EVENT = 'signal';
@@ -135,7 +135,7 @@ export const callSignalSchema = z.discriminatedUnion('kind', [
     connection: callSessionSchema,
     candidates: z.array(iceCandidateSchema).min(1).max(CALL_SIGNAL_MAX_CANDIDATES),
   }),
-  z.object({ kind: z.literal('media'), ...signalBase, muted: z.boolean() }),
+  z.object({ kind: z.literal('media'), ...signalBase, muted: z.boolean(), cameraEnabled: z.boolean().optional() }),
   z.object({ kind: z.literal('bye'), ...signalBase, to: callSessionSchema }),
 ]);
 

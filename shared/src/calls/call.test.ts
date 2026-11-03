@@ -11,8 +11,8 @@ describe('createCallSchema', () => {
     expect(createCallSchema.parse({ conversationId: callId, type: 'voice' })).toEqual({ conversationId: callId, type: 'voice' });
   });
 
-  it('refuses video (Phase 8), unknown fields and bad ids', () => {
-    expect(createCallSchema.safeParse({ conversationId: callId, type: 'video' }).success).toBe(false);
+  it('accepts video calls and rejects unknown fields and bad ids', () => {
+    expect(createCallSchema.safeParse({ conversationId: callId, type: 'video' }).success).toBe(true);
     expect(createCallSchema.safeParse({ conversationId: callId, type: 'voice', initiatorId: from }).success).toBe(false);
     expect(createCallSchema.safeParse({ conversationId: 'x', type: 'voice' }).success).toBe(false);
   });

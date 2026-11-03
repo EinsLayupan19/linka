@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { CALL_HEARTBEAT_SECONDS, CALL_RING_TIMEOUT_SECONDS, type Call } from '@linka/shared';
+import { CALL_HEARTBEAT_SECONDS, CALL_RING_TIMEOUT_SECONDS, type Call, type CallType } from '@linka/shared';
 import { ApiError, toApiError } from '../lib/api';
 import { startCallSession, type CallConnectionState, type CallSession } from '../services/callSession';
 import {
@@ -12,7 +12,7 @@ import {
   sendCallHeartbeat,
   startCall as startCallRequest,
 } from '../services/calls';
-import { getMicrophone, stopStream } from '../services/microphone';
+import { getCamera, getMicrophone, stopStream } from '../services/microphone';
 
 /** Why a call is over, as shown to this user. */
 export type CallEndReason =
@@ -28,11 +28,13 @@ export type CallEndReason =
 export type CallState =
   | { phase: 'idle' }
   /** Getting the microphone and ringing the other person. */
-  | { phase: 'preparing'; conversationId: string }
+  | { phase: 'preparing'; conversationId: string; type: CallType }
+  /** The microphone is ready, but the caller chose not to proceed without a camera. */
+  | { phase: 'camera-fallback'; conversationId: string; message: string }
   /** Our call rings on their side. */
   | { phase: 'outgoing'; call: Call }
   /** Their call rings here. */
-  | { phase: 'incoming'; call: Call; answering: boolean; error: string | null }
+  | { phase: 'incoming'; call: Call; answering: boolean; error: string | null; cameraError: string | null }
   | { phase: 'connecting' | 'connected' | 'reconnecting'; call: Call }
   /** Ongoing, but not in this tab (answered in another tab, or this page was reloaded). */
   | { phase: 'elsewhere'; call: Call }
@@ -44,15 +46,22 @@ export interface CallsContextValue {
   busy: boolean;
   muted: boolean;
   peerMuted: boolean;
+  cameraEnabled: boolean;
+  peerCameraEnabled: boolean;
+  localPreview: MediaStream | null;
+  mediaError: string | null;
   /** The other person's audio (played by CallPanel). */
   remoteStream: MediaStream | null;
-  startCall: (conversationId: string) => Promise<void>;
-  accept: () => Promise<void>;
+  startCall: (conversationId: string, type?: CallType) => Promise<void>;
+  continueAudioOnly: () => void;
+  cancelCameraFallback: () => void;
+  accept: (withoutCamera?: boolean) => Promise<void>;
   decline: () => Promise<void>;
   hangUp: () => Promise<void>;
   /** Moves an ongoing call into this tab (after a reload, or from another tab). */
   rejoin: () => Promise<void>;
   toggleMute: () => void;
+  toggleCamera: () => Promise<void>;
   dismiss: () => void;
   /** call.updated from the user channel. */
   handleCallUpdate: (call: Call) => void;
@@ -64,7 +73,7 @@ export interface CallsContextValue {
 export const ENDED_NOTICE_MS = 4000;
 
 const isOngoingPhase = (state: CallState): state is Extract<CallState, { call: Call }> & { phase: Exclude<CallState['phase'], 'ended'> } =>
-  state.phase !== 'idle' && state.phase !== 'ended' && state.phase !== 'preparing';
+  state.phase !== 'idle' && state.phase !== 'ended' && state.phase !== 'preparing' && state.phase !== 'camera-fallback';
 
 /**
  * All call state for the signed-in user: one call at a time, for the whole app.
@@ -78,7 +87,11 @@ export function useCallManager(myUserId: string): CallsContextValue {
   const [state, setStateValue] = useState<CallState>({ phase: 'idle' });
   const [muted, setMuted] = useState(false);
   const [peerMuted, setPeerMuted] = useState(false);
+  const [cameraEnabled, setCameraEnabled] = useState(false);
+  const [peerCameraEnabled, setPeerCameraEnabled] = useState(true);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [localPreview, setLocalPreview] = useState<MediaStream | null>(null);
+  const [mediaError, setMediaError] = useState<string | null>(null);
 
   const stateRef = useRef(state);
   const setState = useCallback((next: CallState) => {
@@ -90,17 +103,47 @@ export function useCallManager(myUserId: string): CallsContextValue {
   /** A call we are starting but whose id we do not know yet (its call.updated may arrive first). */
   const startingIn = useRef<string | null>(null);
   const localStream = useRef<MediaStream | null>(null);
+  const cameraTrack = useRef<MediaStreamTrack | null>(null);
   const session = useRef<CallSession | null>(null);
   /** The connection's latest state, even while the panel cannot show it yet (still "Calling…"). */
   const connection = useRef<CallConnectionState>('connecting');
   const timers = useRef({ heartbeat: undefined as Interval, ring: undefined as Timer, notice: undefined as Timer });
 
+  const setLocalMedia = useCallback((stream: MediaStream) => {
+    localStream.current = stream;
+    setLocalPreview(stream);
+    const videoTrack = stream.getVideoTracks()[0] ?? null;
+    cameraTrack.current = videoTrack;
+    setCameraEnabled(Boolean(videoTrack && videoTrack.readyState !== 'ended' && videoTrack.enabled));
+    for (const track of stream.getAudioTracks()) {
+      track.onended = () => {
+        if (localStream.current === stream) setMediaError('Your microphone disconnected. Rejoin the call or check your audio device.');
+      };
+    }
+    if (videoTrack) {
+      videoTrack.onended = () => {
+        if (localStream.current !== stream || cameraTrack.current !== videoTrack) return;
+        stream.removeTrack(videoTrack);
+        cameraTrack.current = null;
+        setLocalPreview(new MediaStream(stream.getTracks()));
+        setCameraEnabled(false);
+        setMediaError('Your camera disconnected. Turn the camera on to reconnect it.');
+        session.current?.replaceVideoTrack(null).catch(() => undefined);
+        session.current?.setCameraEnabled(false);
+      };
+    }
+    setMediaError(null);
+  }, []);
+
   /** Releases this tab's media and connection (the call itself is not touched). */
   const release = useCallback(() => {
     session.current?.close();
     session.current = null;
-    stopStream(localStream.current);
+    const stream = localStream.current;
     localStream.current = null;
+    for (const track of stream?.getTracks() ?? []) track.onended = null;
+    stopStream(stream);
+    cameraTrack.current = null;
     clearInterval(timers.current.heartbeat);
     clearTimeout(timers.current.ring);
     timers.current.heartbeat = undefined;
@@ -108,8 +151,12 @@ export function useCallManager(myUserId: string): CallsContextValue {
     owned.current = null;
     connection.current = 'connecting';
     setRemoteStream(null);
+    setLocalPreview(null);
     setMuted(false);
     setPeerMuted(false);
+    setCameraEnabled(false);
+    setPeerCameraEnabled(true);
+    setMediaError(null);
   }, []);
 
   const finish = useCallback(
@@ -153,7 +200,7 @@ export function useCallManager(myUserId: string): CallsContextValue {
         if (mine) setState({ phase: 'outgoing', call });
         else if (iCalled || me.leftAt) setState({ phase: 'elsewhere', call });
         else if (current.phase === 'incoming') setState({ ...current, call });
-        else if (!shown) setState({ phase: 'incoming', call, answering: false, error: null });
+        else if (!shown) setState({ phase: 'incoming', call, answering: false, error: null, cameraError: null });
         return;
       }
       if (call.status === 'active') {
@@ -231,11 +278,13 @@ export function useCallManager(myUserId: string): CallsContextValue {
         myUserId,
         peerUserId: peer.userId,
         role,
+        video: call.type === 'video',
         iceServers,
         localStream: stream,
         onRemoteStream: setRemoteStream,
         onState,
         onPeerMuted: setPeerMuted,
+        onPeerCameraEnabled: setPeerCameraEnabled,
         onReplaced: () => {
           const current = stateRef.current;
           release();
@@ -246,23 +295,12 @@ export function useCallManager(myUserId: string): CallsContextValue {
     [endAndFinish, myUserId, release, setState],
   );
 
-  const startCall = useCallback(
-    async (conversationId: string) => {
-      const current = stateRef.current;
-      if (current.phase !== 'idle' && current.phase !== 'ended') return;
-      clearTimeout(timers.current.notice);
-      setState({ phase: 'preparing', conversationId });
+  const placeCall = useCallback(
+    async (conversationId: string, type: CallType) => {
       startingIn.current = conversationId;
-      try {
-        localStream.current = await getMicrophone(); // before ringing anyone
-      } catch (error) {
-        startingIn.current = null;
-        finish(null, 'failed', error instanceof Error ? error.message : 'Could not start the microphone.');
-        return;
-      }
       let call: Call;
       try {
-        call = await startCallRequest(conversationId);
+        call = await startCallRequest(conversationId, type);
       } catch (error) {
         startingIn.current = null;
         finish(null, 'failed', toApiError(error).message);
@@ -276,23 +314,94 @@ export function useCallManager(myUserId: string): CallsContextValue {
         const now = stateRef.current;
         if (now.phase === 'outgoing' && now.call.id === call.id) void endAndFinish(now.call, 'no-answer');
       }, CALL_RING_TIMEOUT_SECONDS * 1000);
-      // Join now, so we hear the callee's "ready" as soon as they answer.
       void connect(call, 'caller');
     },
     [connect, endAndFinish, finish, setState, startHeartbeat],
   );
 
-  const accept = useCallback(async () => {
+  const startCall = useCallback(
+    async (conversationId: string, type: CallType = 'voice') => {
+      const current = stateRef.current;
+      if (current.phase !== 'idle' && current.phase !== 'ended') return;
+      clearTimeout(timers.current.notice);
+      setMediaError(null);
+      setState({ phase: 'preparing', conversationId, type });
+      let stream: MediaStream;
+      try {
+        stream = await getMicrophone(); // before ringing anyone
+      } catch (error) {
+        finish(null, 'failed', error instanceof Error ? error.message : 'Could not start the microphone.');
+        return;
+      }
+      if (type === 'video') {
+        try {
+          const camera = await getCamera();
+          for (const track of camera.getVideoTracks()) stream.addTrack(track);
+          for (const track of camera.getTracks()) if (track.kind !== 'video') track.stop();
+        } catch (error) {
+          setLocalMedia(stream);
+          setState({
+            phase: 'camera-fallback',
+            conversationId,
+            message: error instanceof Error ? error.message : 'Could not start the camera.',
+          });
+          return;
+        }
+      }
+      setLocalMedia(stream);
+      await placeCall(conversationId, type);
+    },
+    [finish, placeCall, setLocalMedia, setState],
+  );
+
+  const continueAudioOnly = useCallback(() => {
+    const current = stateRef.current;
+    if (current.phase !== 'camera-fallback') return;
+    setState({ phase: 'preparing', conversationId: current.conversationId, type: 'voice' });
+    void placeCall(current.conversationId, 'voice');
+  }, [placeCall, setState]);
+
+  const cancelCameraFallback = useCallback(() => {
+    if (stateRef.current.phase !== 'camera-fallback') return;
+    release();
+    setState({ phase: 'idle' });
+  }, [release, setState]);
+
+  const accept = useCallback(async (withoutCamera = false) => {
     const current = stateRef.current;
     if (current.phase !== 'incoming' || current.answering) return;
-    setState({ ...current, answering: true, error: null });
-    try {
-      localStream.current = await getMicrophone();
-    } catch (error) {
-      const now = stateRef.current;
-      if (now.phase === 'incoming') setState({ ...now, answering: false, error: error instanceof Error ? error.message : 'Could not start the microphone.' });
-      return;
+    setState({ ...current, answering: true, error: null, cameraError: null });
+    let stream = localStream.current;
+    if (!stream) {
+      try {
+        stream = await getMicrophone();
+        setLocalMedia(stream);
+      } catch (error) {
+        const now = stateRef.current;
+        if (now.phase === 'incoming') setState({ ...now, answering: false, error: error instanceof Error ? error.message : 'Could not start the microphone.' });
+        return;
+      }
     }
+    if (current.call.type === 'video' && !withoutCamera && !stream.getVideoTracks().some((track) => track.readyState !== 'ended')) {
+      try {
+        const camera = await getCamera();
+        const videoTracks = camera.getVideoTracks();
+        for (const track of videoTracks) stream.addTrack(track);
+        setLocalMedia(stream);
+        for (const track of camera.getTracks()) if (track.kind !== 'video') track.stop();
+      } catch (error) {
+        const now = stateRef.current;
+        if (now.phase === 'incoming') {
+          setState({
+            ...now,
+            answering: false,
+            cameraError: error instanceof Error ? error.message : 'Could not start the camera.',
+          });
+        }
+        return;
+      }
+    }
+    if (current.call.type === 'video' && withoutCamera) setMediaError('You joined without a camera. Turn it on at any time.');
     owned.current = current.call.id;
     try {
       const call = await acceptCall(current.call.id);
@@ -310,7 +419,7 @@ export function useCallManager(myUserId: string): CallsContextValue {
       const now = stateRef.current;
       if (now.phase === 'incoming') setState({ ...now, answering: false, error: apiError.message });
     }
-  }, [connect, finish, refresh, release, setState, startHeartbeat]);
+  }, [connect, finish, refresh, release, setLocalMedia, setState, startHeartbeat]);
 
   const decline = useCallback(async () => {
     const current = stateRef.current;
@@ -329,19 +438,31 @@ export function useCallManager(myUserId: string): CallsContextValue {
   const rejoin = useCallback(async () => {
     const current = stateRef.current;
     if (current.phase !== 'elsewhere') return;
+    let cameraIssue: string | null = null;
     try {
-      localStream.current = await getMicrophone();
+      const stream = await getMicrophone();
+      if (current.call.type === 'video') {
+        try {
+          const camera = await getCamera();
+          for (const track of camera.getVideoTracks()) stream.addTrack(track);
+          for (const track of camera.getTracks()) if (track.kind !== 'video') track.stop();
+        } catch (error) {
+          cameraIssue = error instanceof Error ? `${error.message} Rejoined with audio only.` : 'Rejoined with audio only.';
+        }
+      }
+      setLocalMedia(stream);
     } catch (error) {
       finish(current.call, 'failed', error instanceof Error ? error.message : 'Could not start the microphone.');
       return;
     }
+    if (cameraIssue) setMediaError(cameraIssue);
     const call = current.call;
     owned.current = call.id;
     const iCalled = call.initiatorId === myUserId;
     setState(call.status === 'ringing' ? { phase: 'outgoing', call } : { phase: 'connecting', call });
     startHeartbeat(call.id);
     void connect(call, iCalled ? 'caller' : 'callee');
-  }, [connect, finish, myUserId, setState, startHeartbeat]);
+  }, [connect, finish, myUserId, setLocalMedia, setState, startHeartbeat]);
 
   const toggleMute = useCallback(() => {
     setMuted((was) => {
@@ -351,6 +472,35 @@ export function useCallManager(myUserId: string): CallsContextValue {
       return next;
     });
   }, []);
+
+  const toggleCamera = useCallback(async () => {
+    const stream = localStream.current;
+    if (!stream) return;
+    const active = cameraTrack.current;
+    if (active && active.readyState !== 'ended') {
+      active.onended = null;
+      stream.removeTrack(active);
+      active.stop();
+      cameraTrack.current = null;
+      setLocalPreview(new MediaStream(stream.getTracks()));
+      setCameraEnabled(false);
+      setMediaError(null);
+      try { await session.current?.replaceVideoTrack(null); } catch { setMediaError('Could not turn off the camera.'); }
+      session.current?.setCameraEnabled(false);
+      return;
+    }
+    try {
+      const camera = await getCamera();
+      const track = camera.getVideoTracks()[0];
+      if (!track) throw new Error('No camera was found.');
+      stream.addTrack(track);
+      setLocalMedia(stream);
+      await session.current?.replaceVideoTrack(track);
+      session.current?.setCameraEnabled(true);
+    } catch (error) {
+      setMediaError(error instanceof Error ? error.message : 'Could not start the camera.');
+    }
+  }, [setLocalMedia]);
 
   const dismiss = useCallback(() => {
     if (stateRef.current.phase === 'ended') setState({ phase: 'idle' });
@@ -414,18 +564,25 @@ export function useCallManager(myUserId: string): CallsContextValue {
       busy,
       muted,
       peerMuted,
+      cameraEnabled,
+      peerCameraEnabled,
+      localPreview,
+      mediaError,
       remoteStream,
       startCall,
+      continueAudioOnly,
+      cancelCameraFallback,
       accept,
       decline,
       hangUp,
       rejoin,
       toggleMute,
+      toggleCamera,
       dismiss,
       handleCallUpdate: apply,
       resync,
     }),
-    [accept, apply, busy, decline, dismiss, hangUp, muted, peerMuted, rejoin, remoteStream, resync, startCall, state, toggleMute],
+    [accept, apply, busy, cameraEnabled, cancelCameraFallback, continueAudioOnly, decline, dismiss, hangUp, localPreview, mediaError, muted, peerCameraEnabled, peerMuted, rejoin, remoteStream, resync, startCall, state, toggleCamera, toggleMute],
   );
 }
 

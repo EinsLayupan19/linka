@@ -70,6 +70,16 @@ describe('starting a call', () => {
     expect(Object.keys(res.body).sort()).toEqual(['conversationId', 'createdAt', 'endedAt', 'id', 'initiatorId', 'participants', 'startedAt', 'status', 'type']);
   });
 
+  it('starts a video call using the existing call lifecycle', async () => {
+    const [maya, jonas] = await Promise.all([user(), user()]);
+    const conversationId = await direct(maya, jonas);
+
+    const res = await maya.post('/api/calls', { conversationId, type: 'video' });
+
+    expect(res.status).toBe(201);
+    expect(callSchema.parse(res.body)).toMatchObject({ conversationId, type: 'video', status: 'ringing' });
+  });
+
   it('requires authentication and membership', async () => {
     const [maya, jonas, outsider] = await Promise.all([user(), user(), user()]);
     const conversationId = await direct(maya, jonas);
@@ -89,7 +99,6 @@ describe('starting a call', () => {
   });
 
   it.each([
-    ['a video call (Phase 8)', { type: 'video' }],
     ['a missing type', { type: undefined }],
     ['a malformed conversation id', { conversationId: 'abc' }],
     ['a spoofed initiator', { initiatorId: randomUUID() }],

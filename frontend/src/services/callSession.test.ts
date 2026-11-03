@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CallSignal } from '@linka/shared';
-import { FakeMediaStream, FakePeerConnection } from '../test/webrtc';
+import { FakeMediaStream, FakePeerConnection, FakeTrack } from '../test/webrtc';
 import {
   CANDIDATE_BATCH_MS,
   LOST_AFTER_MS,
@@ -103,6 +103,44 @@ afterEach(() => {
 });
 
 describe('call session signaling', () => {
+  it('signals camera state alongside microphone state while preserving video call negotiation', async () => {
+    const bus = createBus();
+    const cameraEnabled = vi.fn();
+    const caller = session(bus, 'caller', { video: true });
+    const callee = session(bus, 'callee', { video: true, onPeerCameraEnabled: cameraEnabled });
+    bus.connect(0);
+    bus.connect(1);
+    await bus.flush();
+    expect(caller.peer().transceivers.some((t) => t.receiver.track.kind === 'video')).toBe(true);
+    caller.handle.setCameraEnabled(false);
+    await bus.flush();
+    expect(cameraEnabled).toHaveBeenLastCalledWith(false);
+    caller.handle.setMuted(true);
+    await bus.flush();
+    expect(callee.options.onPeerMuted).toHaveBeenCalledWith(true);
+  });
+
+  it('a callee who answered a video call without a camera can turn it on later, without a new offer', async () => {
+    const bus = createBus();
+    const caller = session(bus, 'caller', { video: true, localStream: new FakeMediaStream([new FakeTrack('audio'), new FakeTrack('video')]) as unknown as MediaStream });
+    const callee = session(bus, 'callee', { video: true }); // microphone only
+    bus.connect(0);
+    bus.connect(1);
+    await bus.flush();
+    expectPaired(caller, callee);
+    // The callee's answer agreed to send video too, on the caller's video line.
+    expect(caller.peer().remoteDescription?.sdp).toContain('m=video:sendrecv');
+
+    const camera = new FakeTrack('video');
+    await callee.handle.replaceVideoTrack(camera as unknown as MediaStreamTrack);
+    await bus.flush();
+
+    const negotiated = callee.peer().transceivers.filter((t) => t.mid !== null && t.receiver.track.kind === 'video');
+    expect(negotiated.map((t) => t.sender.track)).toEqual([camera]);
+    expect(callee.peers).toHaveLength(1);
+    expect(caller.peer().offers).toHaveLength(1);
+  });
+
   it('connects: the callee says ready, the caller offers, the callee answers', async () => {
     const bus = createBus();
     const caller = session(bus, 'caller');
@@ -117,8 +155,8 @@ describe('call session signaling', () => {
     expect(caller.peers).toHaveLength(1);
     expect(callee.peers).toHaveLength(1);
     expectPaired(caller, callee);
-    expect(bus.member(0).sent.map((s) => s.kind)).toEqual(['ready', 'offer']);
-    expect(bus.member(1).sent.map((s) => s.kind)).toEqual(['ready', 'answer']);
+    expect(bus.member(0).sent.map((s) => s.kind).filter((kind) => kind !== 'media')).toEqual(['ready', 'offer']);
+    expect(bus.member(1).sent.map((s) => s.kind).filter((kind) => kind !== 'media')).toEqual(['ready', 'answer']);
   });
 
   it('batches ICE candidates and delivers them to the matching connection', async () => {
@@ -204,6 +242,7 @@ describe('call session signaling', () => {
     await bus.flush();
     const connection = (bus.member(0).sent.find((s) => s.kind === 'offer') as Extract<CallSignal, { kind: 'offer' }>).connection;
     const offersBefore = callee.peers.length;
+    vi.mocked(callee.options.onPeerMuted).mockClear();
     const deliver = (signal: object) => bus.member(1).handlers.onSignal(signal as CallSignal);
     const base = { callId: CALL_ID, session: 'stranger-session-1' };
 

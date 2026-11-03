@@ -8,6 +8,14 @@ import type { IceCandidate } from '@linka/shared';
  * - Remote ICE candidates that arrive before the remote description are queued, not dropped.
  * - Connection states are reduced to what the UI needs: connecting, connected, reconnecting, failed.
  * - offer({ iceRestart: true }) renegotiates new network paths without a new connection.
+ *
+ * Video calls always negotiate one two-way (sendrecv) video line, with or without a camera, so the
+ * camera can be turned on, off and on again later with replaceTrack and no new offer. (Only the
+ * caller ever offers, so the callee could not start a renegotiation of its own.)
+ * - Caller: the line comes from its camera track, or an empty transceiver added before the offer.
+ * - Callee: the line comes from the caller's offer. A transceiver the callee added itself before the
+ *   offer arrived would never be part of the call: browsers only reuse addTrack transceivers for a
+ *   remote offer, so the callee instead makes the offer's video line two-way before answering.
  */
 
 export type PeerState = 'connecting' | 'connected' | 'reconnecting' | 'failed';
@@ -15,6 +23,8 @@ export type PeerState = 'connecting' | 'connected' | 'reconnecting' | 'failed';
 export interface PeerOptions {
   iceServers: RTCIceServer[];
   localStream: MediaStream;
+  /** Keep a video transceiver negotiated even when this tab joins without a camera track. */
+  video?: boolean;
   /** Send an SDP offer or answer to the other browser. */
   sendDescription: (kind: 'offer' | 'answer', sdp: string) => void;
   /** Send local ICE candidates (the signaling layer batches them). */
@@ -33,6 +43,8 @@ export interface Peer {
   /** Caller: apply the callee's answer. */
   acceptAnswer(sdp: string): Promise<void>;
   addRemoteCandidates(candidates: IceCandidate[]): Promise<void>;
+  /** Replace the negotiated video sender track without rebuilding the peer connection. */
+  replaceVideoTrack(track: MediaStreamTrack | null): Promise<void>;
   readonly state: PeerState;
   close(): void;
 }
@@ -62,15 +74,25 @@ export function createPeer(options: PeerOptions): Peer {
 
   for (const track of options.localStream.getTracks()) connection.addTrack(track, options.localStream);
 
+  // A video call has exactly one video transceiver (see above); a voice call has none.
+  const videoTransceiver = () => connection.getTransceivers().find((t) => t.receiver.track.kind === 'video');
+
   connection.onicecandidate = (event) => {
     if (closed || !event.candidate) return;
     const { candidate, sdpMid, sdpMLineIndex, usernameFragment } = event.candidate;
     // An empty candidate string only means "gathering finished": nothing to send.
     if (candidate) options.sendCandidate({ candidate, sdpMid, sdpMLineIndex, usernameFragment });
   };
+  // All remote tracks in one stream. Video sent on a line negotiated before the other person's
+  // camera was on arrives without a stream; on its own stream it would replace (and silence) the
+  // audio. A new stream object for each added track lets React notice the change.
+  let remote: MediaStream | null = null;
   connection.ontrack = (event) => {
     if (closed) return;
-    options.onRemoteStream(event.streams[0] ?? new MediaStream([event.track]));
+    const tracks = remote?.getTracks() ?? [];
+    if (tracks.includes(event.track)) return;
+    remote = new MediaStream([...tracks, event.track]);
+    options.onRemoteStream(remote);
   };
   const reportState = () => {
     if (closed) return;
@@ -94,6 +116,7 @@ export function createPeer(options: PeerOptions): Peer {
   return {
     async offer({ iceRestart = false } = {}) {
       if (closed) return;
+      if (options.video && !videoTransceiver()) connection.addTransceiver('video', { direction: 'sendrecv', streams: [options.localStream] });
       const offer = await connection.createOffer({ iceRestart });
       await connection.setLocalDescription(offer);
       if (!closed && connection.localDescription) options.sendDescription('offer', connection.localDescription.sdp);
@@ -103,6 +126,9 @@ export function createPeer(options: PeerOptions): Peer {
       if (closed) return;
       await connection.setRemoteDescription({ type: 'offer', sdp });
       await flushPending();
+      // Without a camera, the offer's video line would be answered receive-only.
+      const video = options.video ? videoTransceiver() : undefined;
+      if (video && video.direction === 'recvonly') video.direction = 'sendrecv';
       const answer = await connection.createAnswer();
       await connection.setLocalDescription(answer);
       if (!closed && connection.localDescription) options.sendDescription('answer', connection.localDescription.sdp);
@@ -122,6 +148,12 @@ export function createPeer(options: PeerOptions): Peer {
         return;
       }
       for (const candidate of candidates) await connection.addIceCandidate(candidate).catch(() => undefined);
+    },
+
+    async replaceVideoTrack(track) {
+      if (closed) return;
+      // Voice calls have no video line; adding one would need a renegotiation they never do.
+      await videoTransceiver()?.sender.replaceTrack(track);
     },
 
     get state() {

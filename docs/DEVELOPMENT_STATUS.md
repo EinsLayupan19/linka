@@ -8,10 +8,16 @@
 | 4     | Realtime messaging                     | Complete    |
 | 5     | Read, delivery, presence & typing      | Complete    |
 | 6     | Media & file sharing                   | Complete    |
-| 7     | Voice calls                            | In review   |
-| 8     | Video calls                            | Not started |
+| 7     | Voice calls                            | Complete    |
+| 8     | Video calls                            | In review   |
 | 9     | Polish, security & scalability         | Not started |
 | 10    | Production preparation & deployment    | Not started |
+
+Also done between phases: light, dark and system themes (see [Themes](#themes)).
+
+In scope and scheduled for a later phase: the group chat UI (create a group, name it, add and remove
+members, roles, leave). The API for all of it exists since Phase 3; the web client can only show
+groups so far.
 
 ## Phase 1: Foundation
 
@@ -203,7 +209,7 @@ Done:
   closing while it rings cancels the call; signing out ends it; reloaded pages can rejoin
 - Migrations `0009` (heartbeat column, sweep index) and `0010` (call payload, trigger, channel
   policies); see [DATABASE.md](DATABASE.md)
-- Tests: call API (auth, membership, groups refused, video refused, spoofed fields, busy, glare,
+- Tests: call API (auth, membership, groups refused, video refused until Phase 8, spoofed fields, busy, glare,
   accept/decline/end by the right person only, repeat safety, accept-vs-cancel races, two tabs
   answering, heartbeats, ring and stale expiry, ongoing list, ICE servers, 503); database (who may
   join and publish on the call channel, closed after the call, broadcast only, call.updated
@@ -226,6 +232,56 @@ Not verifiable until a Supabase project exists:
 - Real WebRTC between two browsers and networks: ICE gathering, STUN, NAT traversal, audio
   quality, echo cancellation, device changes, autoplay and permission prompts (none of this can be
   reliably unit-tested; it was exercised with stand-ins only)
+
+## Phase 8: Video calls
+
+Done:
+
+- 1:1 video calls on the Phase 7 lifecycle, signaling and recovery (no new API routes or
+  migrations: `POST /api/calls` now accepts `type: 'video'`; the `call_type` enum always had it)
+- "Video" button next to "Call" in 1:1 chats; "Incoming video call"; remote video with your own
+  camera preview; camera on / off during the call, alongside mute / unmute and end
+- Camera requested separately from the microphone (a denied camera never costs the microphone):
+  - caller: camera denied or missing -> "Continue with voice" (the call starts as a voice call) or
+    cancel; nobody is rung until then
+  - callee: camera denied -> "Accept without camera" (still a video call; turn the camera on later)
+  - Join here / reload: rejoins with the camera if possible, otherwise audio only with a notice
+- One two-way video line negotiated for every video call, even without a camera, so the camera can
+  be turned on, off and on again with `replaceTrack` and no new offer; see
+  [ARCHITECTURE.md](ARCHITECTURE.md#video-phase-8)
+- Camera state (`cameraEnabled`) sent with the mute state in the `media` signal; "Camera off" shown
+  instead of their video; a camera unplugged mid-call turns it off with a notice
+- Fixed during review: a callee who answered without a camera could not be seen after turning the
+  camera on (their video went to a transceiver that was never negotiated); once that worked, the
+  caller would have lost the callee's audio (video arriving without a stream replaced the audio
+  stream); and the other person's video stayed blank after they turned their camera off and on (the
+  new `<video>` element never got the stream)
+- Tests: contracts and API (video accepted); WebRTC module (video line for caller and callee with
+  and without a camera, camera on / off / on on the negotiated line, no video in voice calls, remote
+  audio and video in one stream); signaling with two sessions (callee without a camera turns it on,
+  no new offer); call UI (video call start, camera preview and toggle, camera denied for caller and
+  callee, rejoin with camera, their video hidden while their camera is off and shown again)
+
+The `RTCPeerConnection` stand-in follows the browser rule that matters here (a remote offer reuses
+only `addTrack` transceivers), but it carries no media: tests prove the negotiation logic, not that
+video reaches the other browser.
+
+Not in this phase (by design): group video, screen sharing, switching cameras (front / back) or
+picking devices, turning a voice call into a video call, quality / resolution settings, a TURN relay,
+recording.
+
+Not verifiable until checked in two real browsers (step 14 below):
+
+- Video actually reaching the other browser, on one network and across networks; camera
+  permission prompts; camera on / off / on in both directions; mobile browsers (iOS Safari,
+  Android Chrome), including autoplay rules and the panel's size on small screens
+
+## Themes
+
+Light, dark and **system** (follows the operating system, live) themes, chosen under *Profile >
+Appearance* and saved in `localStorage` (`linka-theme`). A small inline script in `index.html`
+applies the saved theme before the app renders, so pages never flash the wrong theme. Signed-out
+pages use the saved (or system) theme; the switch itself is on the profile page only.
 
 ### Supabase setup (dashboard)
 
@@ -277,6 +333,13 @@ Not verifiable until a Supabase project exists:
     relay is needed (not configured yet). No dashboard change is needed for calls: the channel
     policies come with the migrations, and private channels must stay required (step 8).
 
+14. **Check video calls (Phase 8)** in the same two browsers (camera and microphone on both
+    devices; `localhost` or HTTPS, since browsers allow cameras only on secure origins): video call,
+    accept, see each other, turn each camera off and on again, mute, end. Then: deny the camera on
+    the caller (expect "Continue with voice"); deny it on the callee and use "Accept without
+    camera", then turn the camera on during the call (the other side should see it); reload one
+    side and use **Join here**.
+
 Supabase's built-in email service is heavily rate limited and meant for testing; configure custom
 SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
 
@@ -326,7 +389,10 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
 | Enums | Postgres enums built from the shared Zod value lists |
 | Realtime messaging | Postgres Changes vs Broadcast tradeoff presented before Phase 4 |
 | TURN | Not configured (Phase 7): STUN only, from the API's `ICE_SERVERS`. A hosted TURN provider with short-lived credentials when needed (Phase 10) |
-| Calls | 1:1 voice only; the API owns the lifecycle; WebRTC carries the audio browser to browser |
+| Calls | 1:1 voice and video; the API owns the lifecycle; WebRTC carries audio and video browser to browser |
+| Video negotiation | Every video call negotiates one two-way video line, camera or not; the camera goes on / off with `replaceTrack`, never a new offer (only the caller offers) |
+| Camera | Requested separately from (and after) the microphone; a denied camera offers voice (caller) or "Accept without camera" (callee) |
+| Camera off | Sends nothing on the video line and tells the other side (`media.cameraEnabled`), which shows "Camera off" |
 | Call signaling | Private `call:<id>` channel for the participants while ringing or active; the caller always offers; per-tab sessions and per-connection ids |
 | Call state to clients | `call.updated` on each participant's user channel (database trigger), plus `GET /api/calls/ongoing` after reconnects |
 | Call timing | Ring 45 s (server fallback 60 s); heartbeat 20 s; active call without heartbeat ended after 60 s; give-up after 30 s without a connection |
@@ -387,3 +453,14 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
   about 30 s to rejoin before the other side gives up.
 - Access tokens stay valid until they expire (default 1 hour) even after logout; logout revokes the
   refresh token.
+- Video needs more bandwidth than voice and goes browser to browser like audio (no TURN relay, no
+  quality adaptation beyond what the browser does). Networks that block direct connections block
+  video calls too.
+- "Camera off" relies on the other side's `media` signal (sent on every join and change, and to
+  every new tab of theirs). Like mute, it is self-reported: a participant could only mislead the one
+  person in their own call.
+- A voice call cannot become a video call, and a caller who chose "Continue with voice" stays on
+  voice. The callee of a video call can always turn their camera on later.
+- The front camera (`facingMode: user`) is always used; there is no camera switch or device picker.
+- On a phone the video panel sits over the bottom of the chat (it can be hidden only by ending the
+  call); it has not been checked on real phones yet.

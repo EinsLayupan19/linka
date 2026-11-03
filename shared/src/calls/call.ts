@@ -34,15 +34,15 @@ export const callSchema = z.object({
 
 export type Call = z.infer<typeof callSchema>;
 
-// --- Calling (Phase 7: 1:1 voice) ---
+// --- Calling (1:1 voice since Phase 7, video since Phase 8) ---
 
-/** Types that can be started today. Video arrives with Phase 8. */
-export const SUPPORTED_CALL_TYPES = ['voice'] as const;
+/** Call types accepted by the API. */
+export const SUPPORTED_CALL_TYPES = CALL_TYPES;
 
 /** Body of POST /api/calls. Calls are between the two members of a 1:1 conversation. */
 export const createCallSchema = z.strictObject({
   conversationId: z.uuid('Invalid conversation id.'),
-  type: z.enum(SUPPORTED_CALL_TYPES, 'Only voice calls are available.'),
+  type: z.enum(SUPPORTED_CALL_TYPES, 'Only voice and video calls are available.'),
 });
 
 export type CreateCallInput = z.infer<typeof createCallSchema>;

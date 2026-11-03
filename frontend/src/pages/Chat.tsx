@@ -159,17 +159,28 @@ function ConversationScreen({ conversationId }: { conversationId: string }) {
                 <p className={`truncate text-xs ${subtitle === 'Online' ? 'text-accent' : 'text-ink-muted'}`}>{subtitle}</p>
               )}
             </div>
-            {/* Voice calls are 1:1. Disabled while any call is starting, ringing or connected. */}
+            {/* Calls are 1:1. Disabled while any call is starting, ringing or connected. */}
             {conversation.type === 'direct' && otherMember(conversation, profile.id) && (
-              <Button
-                variant="secondary"
-                onClick={() => void calls.startCall(conversationId)}
-                disabled={calls.busy}
-                aria-label={`Call ${title}`}
-                className="h-9 shrink-0 px-3"
-              >
-                Call
-              </Button>
+              <div className="flex shrink-0 gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => void calls.startCall(conversationId)}
+                  disabled={calls.busy}
+                  aria-label={`Call ${title}`}
+                  className="h-9 shrink-0 px-3"
+                >
+                  Call
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => void calls.startCall(conversationId, 'video')}
+                  disabled={calls.busy}
+                  aria-label={`Video call ${title}`}
+                  className="h-9 shrink-0 px-3"
+                >
+                  Video
+                </Button>
+              </div>
             )}
           </>
         ) : (

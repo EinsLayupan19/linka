@@ -6,6 +6,14 @@ export class MicrophoneError extends Error {
   }
 }
 
+/** Thrown when the camera cannot be used; callers can offer audio-only fallback. */
+export class CameraError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CameraError';
+  }
+}
+
 /**
  * Asks for the microphone (the browser shows its permission prompt the first time). Calls ask for
  * it before ringing anyone, so a blocked microphone never leaves the other person waiting.
@@ -27,6 +35,25 @@ export async function getMicrophone(): Promise<MediaStream> {
     if (name === 'NotFoundError' || name === 'OverconstrainedError') throw new MicrophoneError('No microphone was found.');
     if (name === 'NotReadableError') throw new MicrophoneError('Your microphone is being used by another app.');
     throw new MicrophoneError('Could not start the microphone.');
+  }
+}
+
+/** Requests only video so a camera denial never discards an already granted microphone. */
+export async function getCamera(): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new CameraError('Camera access needs a secure connection and a supported browser.');
+  }
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: 'user' } });
+  } catch (error) {
+    const name = error instanceof DOMException || error instanceof Error ? error.name : '';
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      throw new CameraError('Camera access was denied. Allow camera access in browser site settings and try again.');
+    }
+    if (name === 'NotFoundError') throw new CameraError('No camera was found.');
+    if (name === 'NotReadableError') throw new CameraError('The camera is being used by another app.');
+    if (name === 'OverconstrainedError') throw new CameraError('The selected camera is unavailable.');
+    throw new CameraError('Could not start the camera.');
   }
 }
 

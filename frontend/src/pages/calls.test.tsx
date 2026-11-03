@@ -8,7 +8,7 @@ import { jsonResponse } from '../test/fetch';
 import { CONVERSATION_ID, makeConversation, OTHER_USER_ID } from '../test/messages';
 import { renderWithAuth, testProfile } from '../test/render';
 import { latestChannel, realtimeChannels, TEST_USER_ID } from '../test/supabaseMock';
-import { installWebRtcFakes, type FakePeerConnection } from '../test/webrtc';
+import { installWebRtcFakes, type FakeMediaStream, type FakePeerConnection, type FakeTrack } from '../test/webrtc';
 
 vi.mock('../lib/supabase', async () => (await import('../test/supabaseMock')).supabaseModule);
 
@@ -108,8 +108,8 @@ function signal(fields: Partial<CallSignal> & { kind: CallSignal['kind'] }) {
 
 const sentSignals = () => callChannel().sent.map((s) => s.payload as CallSignal);
 
-async function openChat(options: Backend = {}) {
-  const fakes = installWebRtcFakes();
+async function openChat(options: Backend = {}, media: { microphone?: 'granted' | 'denied' | 'missing'; camera?: 'granted' | 'denied' | 'missing' } = {}) {
+  const fakes = installWebRtcFakes(media);
   const api = backend(options);
   const view = renderWithAuth(<App />, { path: `/conversations/${CONVERSATION_ID}` });
   await join(userTopic(TEST_USER_ID));
@@ -136,6 +136,94 @@ async function callAndConnect() {
 }
 
 describe('calling someone', () => {
+  it('offers audio-only fallback when the outgoing camera is denied', async () => {
+    const { api } = await openChat({}, { camera: 'denied' });
+    fireEvent.click(screen.getByRole('button', { name: 'Video call Jonas Lindqvist' }));
+    const panel = await screen.findByRole('region', { name: 'Video call' });
+    expect(await within(panel).findByText(/Camera access was denied/)).toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Continue with voice' }));
+    await screen.findByText('Calling…');
+    expect(api.callsTo('POST', '/api/calls')[0]!.body).toEqual({ conversationId: CONVERSATION_ID, type: 'voice' });
+  });
+
+  it('identifies an incoming video call and permits audio-only acceptance after camera denial', async () => {
+    const incoming = makeCall({ type: 'video' }, { me: 'callee' });
+    const { api } = await openChat({ ongoing: [incoming] }, { camera: 'denied' });
+    const panel = await screen.findByRole('region', { name: 'Video call' });
+    expect(within(panel).getByText('Incoming video call')).toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Accept' }));
+    expect(await within(panel).findByText(/Camera access was denied/)).toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Accept without camera' }));
+    await waitFor(() => expect(api.callsTo('POST', `/api/calls/${CALL_ID}/accept`)).toHaveLength(1));
+    await join(callTopic(CALL_ID));
+    expect(screen.getByRole('region', { name: 'Video call' })).toBeInTheDocument();
+  });
+
+  it('starts a video call, previews camera, and toggles its negotiated track without ending audio', async () => {
+    const videoCall = makeCall({ type: 'video' });
+    const { api, fakes } = await openChat({ onStart: () => jsonResponse(videoCall, 201) });
+    fireEvent.click(screen.getByRole('button', { name: 'Video call Jonas Lindqvist' }));
+    expect(await screen.findByRole('region', { name: 'Video call' })).toBeInTheDocument();
+    await join(callTopic(CALL_ID));
+    signal({ kind: 'ready' });
+    await waitFor(() => expect(fakes.latestPeer()).toBeDefined());
+    const peer = fakes.latestPeer()!;
+    const offer = sentSignals().find((item) => item.kind === 'offer') as Extract<CallSignal, { kind: 'offer' }>;
+    signal({ kind: 'answer', to: offer.session, connection: offer.connection, sdp: 'answer-sdp' });
+    await waitFor(() => expect(peer.remoteDescription?.sdp).toBe('answer-sdp'));
+    callUpdated(active(videoCall));
+    act(() => peer.setState('connected'));
+
+    expect(api.callsTo('POST', '/api/calls')[0]!.body).toEqual({ conversationId: CONVERSATION_ID, type: 'video' });
+    expect(fakes.getUserMedia).toHaveBeenCalledWith(expect.objectContaining({ video: { facingMode: 'user' }, audio: false }));
+    expect(peer.tracks).toHaveLength(2);
+    const panel = screen.getByRole('region', { name: 'Video call' });
+    expect(within(panel).getByLabelText('Your camera preview')).toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Turn camera off' }));
+    await waitFor(() => expect(sentSignals().at(-1)).toMatchObject({ kind: 'media', cameraEnabled: false }));
+    expect(peer.closed).toBe(false);
+    expect(within(panel).getByRole('button', { name: 'Mute' })).toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Turn camera on' }));
+    await waitFor(() => expect(sentSignals().at(-1)).toMatchObject({ kind: 'media', cameraEnabled: true }));
+    const preview = within(panel).getByLabelText('Your camera preview') as HTMLVideoElement;
+    expect((preview.srcObject as unknown as FakeMediaStream).getVideoTracks()).toHaveLength(1);
+  });
+
+  it('shows their video, hides it while their camera is off, and shows it again when it is back on', async () => {
+    const videoCall = makeCall({ type: 'video' });
+    const { fakes } = await openChat({ onStart: () => jsonResponse(videoCall, 201) });
+    fireEvent.click(screen.getByRole('button', { name: 'Video call Jonas Lindqvist' }));
+    await screen.findByRole('region', { name: 'Video call' });
+    await join(callTopic(CALL_ID));
+    signal({ kind: 'ready' });
+    await waitFor(() => expect(fakes.latestPeer()).toBeDefined());
+    const peer = fakes.latestPeer()!;
+    callUpdated(active(videoCall));
+    act(() => peer.setState('connected'));
+    // Their audio arrives with a stream; their video on its own (as for a camera turned on late).
+    let audio!: FakeTrack;
+    let video!: FakeTrack;
+    act(() => {
+      audio = peer.receiveTrack('audio');
+      video = peer.receiveTrack('video', { withStream: false });
+    });
+    const panel = screen.getByRole('region', { name: 'Video call' });
+    const shownStream = () => (within(panel).getByLabelText("Jonas Lindqvist's video") as HTMLVideoElement).srcObject as unknown as FakeMediaStream;
+    const heardStream = () => (document.querySelector('audio')!.srcObject as unknown as FakeMediaStream);
+
+    expect(shownStream().getVideoTracks()).toEqual([video]);
+    expect(heardStream().getAudioTracks()).toEqual([audio]);
+
+    signal({ kind: 'media', muted: false, cameraEnabled: false });
+    expect(await within(panel).findByText('Camera off')).toBeInTheDocument();
+    expect(within(panel).queryByLabelText("Jonas Lindqvist's video")).not.toBeInTheDocument();
+
+    signal({ kind: 'media', muted: false, cameraEnabled: true });
+    // A new <video> element: it must get the stream too, not stay blank.
+    await waitFor(() => expect(shownStream()?.getVideoTracks()).toEqual([video]));
+    expect(heardStream().getAudioTracks()).toEqual([audio]);
+  });
+
   it('asks for the microphone, rings them, connects over WebRTC, and shows the call', async () => {
     const { api, fakes, peer, offer } = await callAndConnect();
 
@@ -371,6 +459,20 @@ describe('being called', () => {
 
     fireEvent.click(await within(await findPanel()).findByRole('button', { name: 'Join here' }));
     expect(await within(panel()).findByText('Connecting…')).toBeInTheDocument();
+    await join(callTopic(CALL_ID));
+    expect(sentSignals()[0]).toMatchObject({ kind: 'ready' });
+  });
+
+  it('rejoins an active video call with camera media and the Join here recovery action', async () => {
+    const ongoing = active(makeCall({ type: 'video' }, { me: 'callee' }));
+    const fakes = installWebRtcFakes();
+    backend({ ongoing: [ongoing] });
+    renderWithAuth(<App />, { path: '/' });
+
+    const panel = await screen.findByRole('region', { name: 'Video call' });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Join here' }));
+    expect(await within(panel).findByText('Connecting…')).toBeInTheDocument();
+    await waitFor(() => expect(fakes.getUserMedia).toHaveBeenCalledWith(expect.objectContaining({ video: { facingMode: 'user' } })));
     await join(callTopic(CALL_ID));
     expect(sentSignals()[0]).toMatchObject({ kind: 'ready' });
   });

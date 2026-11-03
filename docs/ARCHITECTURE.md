@@ -167,7 +167,7 @@ answer 503 without details.
 
 | Method | Path | Body | Who / result |
 | ------ | ---- | ---- | ------------ |
-| POST   | `/api/calls` | `{ conversationId, type: 'voice' }` | A member of a 1:1 conversation; 201 ringing call. 400 `CALL_NOT_SUPPORTED` (group), 409 `CALL_IN_PROGRESS` / `USER_BUSY` |
+| POST   | `/api/calls` | `{ conversationId, type: 'voice' \| 'video' }` | A member of a 1:1 conversation; 201 ringing call. 400 `CALL_NOT_SUPPORTED` (group), 409 `CALL_IN_PROGRESS` / `USER_BUSY` |
 | GET    | `/api/calls/ongoing` |  | 200 `{ calls }`: your ringing and active calls |
 | GET    | `/api/calls/ice-servers` |  | 200 `{ iceServers }` (STUN/TURN for WebRTC) |
 | GET    | `/api/calls/:callId` |  | Members of its conversation |
@@ -491,8 +491,9 @@ if signing fails the user simply shows their initial.
 
 ## Voice calls (Phase 7)
 
-1:1 voice calls between the two members of a direct conversation. Group calls and video come
-later (video is Phase 8; the call contract already has a `type`).
+1:1 voice calls between the two members of a direct conversation. Video calls (Phase 8) use
+everything described here unchanged and add a video line; see [Video](#video-phase-8). Group
+calls come later.
 
 ```text
 Browser A ──API──> start / accept / decline / end / heartbeat      (call state, authorized, stored)
@@ -562,9 +563,9 @@ no presence. Messages are validated against `callSignalSchema`:
 | --- | --- |
 | `services/webrtc.ts` | One `RTCPeerConnection`: offer/answer, queued remote candidates, ICE restart, simplified states. No React, no Linka API |
 | `services/callSession.ts` | The signaling protocol above, on top of `webrtc.ts` and `joinCallChannel` |
-| `services/calls.ts`, `services/microphone.ts` | Lifecycle API calls; microphone access with readable errors |
-| `hooks/useCalls.ts` | The call state machine for the whole app (one call at a time), timers, cleanup |
-| `components/call/CallPanel.tsx` | Incoming / calling / connecting / in call / reconnecting / ended UI, remote audio |
+| `services/calls.ts`, `services/microphone.ts` | Lifecycle API calls; microphone and camera access with readable errors |
+| `hooks/useCalls.ts` | The call state machine for the whole app (one call at a time), timers, cleanup, camera on / off |
+| `components/call/CallPanel.tsx` | Incoming / calling / connecting / in call / reconnecting / ended UI, remote audio and video, camera preview |
 | `components/layout/SignedInLayout.tsx` | Hosts the conversation list and calls for every signed-in page |
 
 - The microphone is requested **before** ringing anyone (a blocked microphone never leaves the
@@ -583,13 +584,50 @@ no presence. Messages are validated against `callSignalSchema`:
   provider with short-lived credentials can be added behind the same endpoint without frontend
   changes (Phase 10 decision).
 
+### Video (Phase 8)
+
+A video call is a call with `type: 'video'`: same API, lifecycle, `call:<id>` signaling,
+heartbeats, ICE restarts and cleanup as above. What it adds:
+
+**One two-way video line, camera or not.** WebRTC sends media on *transceivers*, one per media
+line (`m=` line) in the SDP. Turning a camera on later only needs `sender.replaceTrack(camera)` on
+an existing two-way video transceiver; *adding* a transceiver would need a new offer. Only the
+caller ever offers (no glare), so `services/webrtc.ts` makes sure the video line exists from the
+first offer:
+
+- **Caller:** its camera track (`addTrack`) makes the line; without a camera it adds an empty
+  `sendrecv` video transceiver just before the offer.
+- **Callee:** the line comes from the caller's offer. The callee must not add a transceiver of its
+  own beforehand: browsers reuse only `addTrack` transceivers for a remote offer (JSEP), so it would
+  stay outside the call and its camera would never reach the caller. Instead, with no camera the
+  offer's video transceiver would be answered receive-only, so the callee switches it to `sendrecv`
+  before answering. With a camera, its `addTrack` transceiver is reused for the line.
+- **Camera off / on:** `replaceTrack(null)` / `replaceTrack(camera)` on that line, plus
+  `cameraEnabled` in the `media` signal. No renegotiation, no new connection, audio untouched.
+
+**One remote stream.** Video that arrives on a line negotiated before the sender's camera was on has
+no `MediaStream`. `webrtc.ts` therefore collects every remote track into one stream it owns (a new
+stream object per added track, so React re-renders); otherwise the video's own stream would replace
+the audio's and the call would go silent.
+
+**Rendering.** `CallPanel` plays audio from a hidden `<audio>` element (kept mounted) and shows the
+same stream in a muted `<video>`. While their camera is off ("Camera off", from the `media` signal)
+the `<video>` is removed; a ref callback attaches the stream to every new `<video>` element, so it
+is never blank when the camera comes back. Your own preview works the same way.
+
+**Camera access** (`getCamera`) is separate from the microphone, so a denied camera never costs the
+microphone: the caller can continue as a voice call; the callee can "Accept without camera" and turn
+it on later; Join here falls back to audio only with a notice. A camera that disconnects mid-call is
+turned off with a notice.
+
 ### What cannot be unit-tested
 
-Real WebRTC (ICE gathering, NAT traversal, DTLS, audio devices, echo cancellation, autoplay
-policies, browser permission prompts) and Supabase's real WebSocket delivery. Tests use a
-`RTCPeerConnection` stand-in that follows the offer/answer state machine, fake media tracks, and
-the Realtime stand-in; database tests check the channel policy and trigger on PGlite. Two-browser
-checks on a real Supabase project are listed in DEVELOPMENT_STATUS.md.
+Real WebRTC (ICE gathering, NAT traversal, DTLS, audio and video devices, echo cancellation,
+autoplay policies, browser permission prompts) and Supabase's real WebSocket delivery. Tests use a
+`RTCPeerConnection` stand-in that follows the offer/answer state machine (including which
+transceivers a remote offer reuses), fake media tracks, and the Realtime stand-in; database tests
+check the channel policy and trigger on PGlite. Two-browser checks on a real Supabase project are
+listed in DEVELOPMENT_STATUS.md.
 
 ## Frontend (`frontend/src`)
 
@@ -603,7 +641,9 @@ checks on a real Supabase project are listed in DEVELOPMENT_STATUS.md.
 | `test/`      | Test setup and helpers                                      |
 
 **Styling.** Tailwind CSS v4 with semantic color tokens defined in `src/index.css` (`canvas`, `ink`,
-`accent`, ...). Dark mode follows the operating system (`prefers-color-scheme`). One accent color
+`accent`, ...). Light, dark or system theme (*Profile > Appearance*, saved in `localStorage`):
+`ThemeProvider` sets `data-theme` on `<html>`, `:root[data-theme='dark']` swaps the token values,
+and an inline script in `index.html` applies the saved choice before the first render. One accent color
 (teal). Radius system: controls `rounded-lg`, panels and message bubbles `rounded-xl`, avatars
 `rounded-full`. Your own messages use the accent with full-contrast text; others use the surface.
 

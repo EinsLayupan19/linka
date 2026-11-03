@@ -3,7 +3,7 @@
 A real-time messaging and calling platform: 1:1 and group chats, read/delivery states, presence,
 typing indicators, file sharing, and WebRTC voice/video calls.
 
-> Status: **Phase 7 (voice calls)**. See [docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md).
+> Status: **Phase 8 (video calls)**. See [docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md).
 >
 > Built so far (tested locally; not yet verified against a hosted Supabase project): sign-up and
 > login, profiles and profile pictures, finding people by username, 1:1 conversations, sending text
@@ -13,8 +13,9 @@ typing indicators, file sharing, and WebRTC voice/video calls.
 > ([messaging](docs/ARCHITECTURE.md#messaging-and-realtime-phase-4),
 > [live state](docs/ARCHITECTURE.md#live-state-phase-5-receipts-unread-counts-live-list-presence-typing)).
 > Files live in private Supabase Storage buckets behind short-lived signed URLs
-> ([files and media](docs/ARCHITECTURE.md#files-and-media-phase-6)). 1:1 voice calls run over WebRTC, browser
-> to browser ([voice calls](docs/ARCHITECTURE.md#voice-calls-phase-7)).
+> ([files and media](docs/ARCHITECTURE.md#files-and-media-phase-6)). 1:1 voice and video calls run over WebRTC,
+> browser to browser ([voice calls](docs/ARCHITECTURE.md#voice-calls-phase-7),
+> [video](docs/ARCHITECTURE.md#video-phase-8)). Light, dark and system themes.
 
 ## Tech stack
 
