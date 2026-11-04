@@ -56,7 +56,7 @@ values. **Never paste real keys or passwords into this file, a commit, a chat or
 | ----- | ------- | ---- | ------------ |
 | Frontend (React app) | **Vercel** | Hobby (free) | The app is just static files after `vite build`; Vercel serves them over HTTPS from a global CDN, builds on every push, and supports the page-reload rule a single-page app needs. |
 | Backend (Express API) | **Render** | Free web service | Runs a normal, long-lived Node process, which the API needs: it keeps a database connection pool, rate-limit counters in memory, and two background clean-up timers. Serverless hosts (Vercel Functions, Netlify Functions) would stop those between requests. |
-| Database, auth, realtime, files | **Supabase** | Free (the project you already use) | Already set up and holding migrations 0000-0010. |
+| Database, auth, realtime, files | **Supabase** | Free (the project you already use) | Already set up, with all migrations (0000-0013) applied. |
 
 **Why not other options?**
 
@@ -160,7 +160,7 @@ You already configured most of this while developing (see "Supabase setup" in
 only what is listed as a change.
 
 This guide **reuses your existing Supabase project** as production. It is simplest: keys, buckets,
-JWT settings and migrations 0000-0010 are already there. The trade-off: your local development
+JWT settings and all migrations (0000-0013) are already there. The trade-off: your local development
 uses the same database, so test accounts and messages you create locally appear in production.
 If you want a clean, separate production project later, create a second free project and repeat
 the whole "Supabase setup" list plus all migrations for it.
@@ -206,21 +206,25 @@ A **migration** is a numbered SQL file that changes the database's structure (ad
 rule, a trigger). They must run in order, exactly once. Drizzle records which ones ran in a
 table called `drizzle.__drizzle_migrations`.
 
-### 5.1 Current state (checked read-only on 2026-11-04)
+### 5.1 Current state (verified read-only on 2026-11-04)
 
-| Migrations | State on your Supabase project |
-| ---------- | ------------------------------ |
-| `0000` to `0010` | **Applied** (11 entries) |
-| `0011_group_owner_invariant` | **Not applied** |
-| `0012_conversation_channel_version` | **Not applied** (the `conversations.channel_version` column does not exist yet) |
-| `0013_versioned_realtime_topics` | **Not applied** |
+| Migrations | State on your Supabase project (`xmkfqenlubpgoqeodrzp`) |
+| ---------- | ------------------------------------------------------- |
+| `0000` to `0010` | **Applied** and recorded |
+| `0011_group_owner_invariant` | **Applied** and recorded |
+| `0012_conversation_channel_version` | **Applied** and recorded |
+| `0013_versioned_realtime_topics` | **Applied** and recorded |
 
-**These three must be applied before the new backend goes live.** The current code reads
-`channel_version`. Without it, every conversation request fails ("Something went wrong") and live
-updates stop. This is also true for your *local* development right now, since it uses the same
-database.
+**Nothing is pending.** Drizzle's history has 14 records, the latest `created_at` is
+`1793756857300` (= `0013`), and every recorded hash matches its local file. The hosted schema
+(column, trigger, functions, grants, realtime policies) was compared with the migration files and
+matches. **There is no migration step left for this deployment**: go on to
+[section 6](#6-backend-deployment-render).
 
-### 5.2 What 0011-0013 do (and do not do)
+If the application ever reports `column … channel_version does not exist`, the database it uses is
+not this one, or is missing these migrations: see [5.3](#53-checking-and-applying-migrations-you-terminal).
+
+### 5.2 What 0011-0013 changed (applied 2026-11-04)
 
 | Migration | What it changes | Touches existing data? |
 | --------- | --------------- | ---------------------- |
@@ -228,32 +232,41 @@ database.
 | `0012` | Adds the column `conversations.channel_version` (a number, starting at 0) | Adds the column with 0 for every row; nothing else changes |
 | `0013` | Realtime topics become `conversation:<id>:<version>` and `live:<id>:<version>`; replaces 7 trigger/permission functions; removing a member bumps the version | No rows changed. Browsers that still run the *old* app lose live updates until they reload |
 
-So the risk to your data is low. The visible effect is that anyone with the old version of the app
-open stops getting live updates until they reload the page. Migrations are applied in one
-transaction: if one fails, none of them is applied.
+Existing data was preserved; the visible effect was that anyone with the old version of the app
+open stopped getting live updates until they reloaded the page.
 
-**Backups.** The Free plan has no automatic backups. If you have PostgreSQL's `pg_dump` installed,
-you can take one first (optional):
-`pg_dump "<DATABASE_URL>" --schema=public --schema=private -Fc -f linka-before-0011.dump`
-(run it where the file stays private; the dump contains everyone's data).
+### 5.3 Checking and applying migrations [You, terminal]
 
-### 5.3 Apply them [Needs your approval] [You, terminal]
-
-Your `backend/.env` already contains the Session pooler `DATABASE_URL` (that is how 0000-0010 were
-applied). From the `linka` folder:
+Use this to confirm the state now, and for any **future** migration (`0014` and later).
+Your `backend/.env` contains the Session pooler `DATABASE_URL`. From the `linka` folder
+(the repository root):
 
 ```powershell
-cd backend
-npm run db:migrate
-cd ..
+npm run db:migrate -w @linka/backend
 ```
 
-Expected: drizzle-kit prints the migrations it applies and ends without an error. Then verify in
-Supabase > **SQL Editor** (read-only queries):
+- **Nothing pending** (the situation now): it ends with `migrations applied successfully!`, exit
+  code 0, and changes nothing. PostgreSQL also prints two harmless `NOTICE` blocks:
+  `schema "drizzle" already exists, skipping` and
+  `relation "__drizzle_migrations" already exists, skipping`.
+- **New migrations pending** [Needs your approval]: the same command applies them, in order, in one
+  transaction (if one fails, none is applied). Take a backup first if you can (below).
+
+**Always apply migrations with this command**, never by pasting SQL into the Supabase SQL Editor or
+with Supabase's migration tools. Drizzle only knows about migrations it applied itself (its table
+`drizzle.__drizzle_migrations`); anything applied another way runs again on the next `db:migrate`
+and fails. (This happened once with `0011`-`0013`; the history was repaired without re-running SQL.)
+
+**Backups.** The Free plan has no automatic backups. If you have PostgreSQL's `pg_dump` installed,
+you can take one before applying a new migration (optional):
+`pg_dump "<DATABASE_URL>" --schema=public --schema=private -Fc -f linka-backup.dump`
+(run it where the file stays private; the dump contains everyone's data).
+
+Verify in Supabase > **SQL Editor** (read-only queries):
 
 ```sql
--- 14 rows expected (0000-0013)
-select count(*) from drizzle.__drizzle_migrations;
+-- 14 rows and latest 1793756857300 expected today (0000-0013); more after future migrations
+select count(*), max(created_at) from drizzle.__drizzle_migrations;
 
 -- the new column exists
 select column_name from information_schema.columns
@@ -485,7 +498,7 @@ browser: F12 > **Console** and **Network**.
 | "Could not verify your session. Try again shortly." (503) | The API could not reach Supabase's signing keys | Usually temporary; check `SUPABASE_URL` and Supabase status |
 | Sign-up: "Email address not authorized" | Built-in email only sends to your Supabase team | Set up custom SMTP ([4.2](#42-email-sending-smtp-required-for-real-users-you-dashboard)) |
 | Email link opens `localhost` or says "redirect not allowed" | Supabase Auth URLs not updated | [Section 8.2](#82-auth-urls-in-supabase-needs-your-approval-you-dashboard) |
-| Every chat shows "Something went wrong"; Render log: `column … channel_version does not exist` | Migrations 0011-0013 not applied | [Section 5.3](#53-apply-them-needs-your-approval-you-terminal) |
+| Every chat shows "Something went wrong"; Render log: `column … channel_version does not exist` | The API is connected to a database without migrations 0011-0013 (check `DATABASE_URL` points to project `xmkfqenlubpgoqeodrzp`) | [Section 5.3](#53-checking-and-applying-migrations-you-terminal) |
 | Messages appear only after reloading | Realtime blocked: migration 0013 missing, or an old app version still open | Apply migrations; reload both browsers; check the console for channel errors |
 | Uploads: "not configured" (503) | `SUPABASE_SECRET_KEY` missing on Render | Add it (the secret key, not the publishable one) |
 | Upload fails in the browser with a CORS error on `*.supabase.co` | Storage's allowed origins | Check Storage settings for the project's allowed origins |
@@ -513,7 +526,7 @@ rows from `drizzle.__drizzle_migrations`.
 
 - **Rolling back code to any commit from `cf4d367` onward is safe**: those versions expect
   migrations 0000-0013.
-- **Do not roll back to a commit before `cf4d367`** once 0011-0013 are applied: older versions use
+- **Do not roll back to a commit before `cf4d367`**: 0011-0013 are applied, and older versions use
   the old realtime topic names, which 0013 no longer allows, so live updates would stop. If that is
   ever truly needed, the old functions would have to be restored with hand-written SQL. Ask for
   that to be prepared and reviewed; don't improvise it.
@@ -577,7 +590,7 @@ would run out. Decide this yourself.
 ## Deployment order (one-page summary)
 
 1. [You, dashboard] Supabase checks (4.1) and custom SMTP (4.2).
-2. [Needs your approval] [You, terminal] Apply migrations 0011-0013 (5.3) and verify.
+2. ~~Apply migrations 0011-0013~~ **Done** (2026-11-04): all 14 applied and recorded; `npm run db:migrate -w @linka/backend` reports nothing pending (5.1, 5.3).
 3. [You, dashboard] Render Blueprint (6). Note `<your-api>`. Check `/api/health`.
 4. [You, dashboard] Vercel project with the three `VITE_` variables (7). Note `<your-frontend>`.
 5. [You, dashboard] Render `CORS_ORIGIN` = `<your-frontend>` (8.1).

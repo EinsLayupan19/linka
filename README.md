@@ -86,7 +86,9 @@ npm run dev -w @linka/frontend -- --port 5199
 | `npm test`          | All test suites                                       |
 | `npm run lint`      | ESLint across the repo                                |
 
-Database (from `backend/`, needs `DATABASE_URL`): `npm run db:generate`, `npm run db:migrate`.
+Database (needs `DATABASE_URL` in `backend/.env`): `npm run db:generate -w @linka/backend` and
+`npm run db:migrate -w @linka/backend` from the repository root (or without `-w` inside `backend/`).
+Apply migrations only with `db:migrate`; see [docs/DATABASE.md](docs/DATABASE.md#migrations-drizzle-owns-everything).
 
 ## Environment variables
 

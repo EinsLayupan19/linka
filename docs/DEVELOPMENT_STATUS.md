@@ -384,9 +384,15 @@ production mode (refuses a missing `CORS_ORIGIN`; health, CORS allow/deny, 401 a
 security headers); the frontend build refuses missing variables and bakes in the configured API
 address.
 
-Not done yet (needs the owner): applying migrations `0011`-`0013` to the hosted database,
-custom SMTP, the Render and Vercel projects, Supabase Auth URLs, and every hosted check in
-DEPLOYMENT.md section 10.
+Hosted database (verified read-only 2026-11-04): migrations `0000`-`0013` are applied and recorded
+in Drizzle's history (14 records, latest `1793756857300`, hashes matching the files); the schema
+matches the migration files; `npm run db:migrate -w @linka/backend` reports nothing pending.
+`0011`-`0013` were first applied through Supabase's migration tooling, which Drizzle does not see;
+the three missing history rows were then added (no SQL re-run). From now on apply migrations only
+with `db:migrate` (see DATABASE.md, "Migrations: Drizzle owns everything").
+
+Not done yet (needs the owner): custom SMTP, the Render and Vercel projects, Supabase Auth URLs,
+and every hosted check in DEPLOYMENT.md section 10.
 
 ## Themes
 
@@ -411,7 +417,9 @@ pages use the saved (or system) theme; the switch itself is on the profile page 
    - Redirect URLs: add `http://localhost:5173/**`.
 4. **Email confirmation.** *Authentication > Sign In / Providers > Email*: keep "Confirm email" on.
 5. **Password length.** Same page: set the minimum password length to **8** to match the app.
-6. **Apply the migrations:** `cd backend && npm run db:migrate`.
+6. **Apply the migrations:** `npm run db:migrate -w @linka/backend` from the repository root (or
+   `npm run db:migrate` inside `backend/`). Only ever apply migrations this way, so Drizzle's
+   history stays in sync. On the current hosted project all of them (`0000`-`0013`) are applied.
 7. **API exposed schemas.** *Project Settings > Data API > Exposed schemas*: leave the default
    (`public`, `graphql_public`). Do **not** add `private`: it holds the RLS helper function.
 8. **Realtime: private channels only.** *Realtime > Settings*: turn **off** "Allow public access"
@@ -457,8 +465,9 @@ pages use the saved (or system) theme; the switch itself is on the profile page 
     person's list drops the group and its page shows "Conversation not found"), make someone an
     admin, transfer ownership, and leave. No dashboard change is needed.
 
-16. **Check Phase 10.** Apply the new migrations (`cd backend && npm run db:migrate`: `0011` to
-    `0013`). Then, with the step 15 group open in three browsers:
+16. **Check Phase 10.** Migrations `0011` to `0013` are applied on the hosted project (2026-11-04;
+    `npm run db:migrate -w @linka/backend` reports nothing pending). Then, with the step 15 group
+    open in three browsers:
     - Remove one person while they have the group open, then send a message from another browser:
       it must **not** appear in the removed person's browser (before Phase 10 it did), and the two
       others keep receiving messages, typing and "Online" without a reload.

@@ -35,9 +35,10 @@ conversations ─────────┘
 | `0012_conversation_channel_version` | generated | `conversations.channel_version` |
 | `0013_versioned_realtime_topics` | custom | Topics `conversation:<id>:<version>` and `live:<id>:<version>`: `private.conversation_topic()`, `private.live_topic()`, `private.can_access_versioned_topic()`; the broadcast triggers publish there; removals bump the version |
 
-Hosted project (checked read-only on 2026-11-04): `0000`-`0010` applied; `0011`-`0013` **not yet
-applied**. The current code needs all of them; see [DEPLOYMENT.md](DEPLOYMENT.md#5-database-migrations)
-for the order and checks.
+Hosted project (verified read-only on 2026-11-04): **`0000`-`0013` are all applied** and recorded in
+Drizzle's history (`drizzle.__drizzle_migrations`: 14 records, latest `created_at` `1793756857300`,
+every hash matching its local file). `npm run db:migrate -w @linka/backend` reports nothing pending.
+See [DEPLOYMENT.md](DEPLOYMENT.md#5-database-migrations) for the checks.
 
 ## Enums
 
@@ -371,7 +372,19 @@ npx drizzle-kit generate --custom --name=<short_name>
 npm run db:migrate
 ```
 
+From the repository root, the same commands are `npm run db:generate -w @linka/backend` and
+`npm run db:migrate -w @linka/backend`. Both read `backend/.env`.
+
 Review every generated SQL file before applying it and commit it with the schema change.
+
+**Apply migrations only with `npm run db:migrate`.** Drizzle decides what is pending from its own
+history table: it applies every local migration newer than the latest recorded `created_at`. A
+migration applied any other way (the Supabase SQL Editor, Supabase's migration tools) changes the
+schema but is not recorded there, so the next `db:migrate` tries to apply it again and fails. That
+happened once with `0011`-`0013` (applied through Supabase's tooling on 2026-11-04). It was fixed by
+adding the three missing history rows with the hashes Drizzle computes from the files, without
+re-running any SQL. When `db:migrate` finds nothing to do it still prints two harmless PostgreSQL
+`NOTICE`s (`schema "drizzle" already exists`, `relation "__drizzle_migrations" already exists`).
 
 **Lesson recorded in the schema:** a CHECK constraint that evaluates to `NULL` passes. Conditions on
 nullable columns therefore say `is not null` explicitly (for example `conversations_name_shape` and
