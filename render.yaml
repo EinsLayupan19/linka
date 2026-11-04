@@ -1,0 +1,45 @@
+# Render Blueprint for the Linka API (Express). See docs/DEPLOYMENT.md, section "Backend".
+#
+# Render reads this file when you create the service with "New > Blueprint". Values marked
+# `sync: false` are secrets: Render asks for them once in the dashboard. They are never stored here.
+services:
+  - type: web
+    name: linka-api
+    runtime: node
+    plan: free
+    # Closest Render region to the Supabase project (Tokyo, ap-northeast-1). Change it if the
+    # Supabase project lives elsewhere: oregon, ohio, virginia, frankfurt or singapore.
+    region: singapore
+    # devDependencies (TypeScript) are needed to build; NODE_ENV=production would skip them.
+    buildCommand: npm ci --include=dev && npm run build -w @linka/shared && npm run build -w @linka/backend
+    startCommand: node backend/dist/server.js
+    # Always 200 while the process runs; the body says whether the database is reachable.
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    # Only redeploy the API when something it uses changed (not for frontend-only commits).
+    buildFilter:
+      paths:
+        - backend/**
+        - shared/**
+        - package.json
+        - package-lock.json
+        - render.yaml
+        - .node-version
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Render puts exactly one proxy in front of the service.
+      - key: TRUST_PROXY
+        value: "1"
+      # The frontend's address, e.g. https://linka.vercel.app (no trailing slash needed).
+      - key: CORS_ORIGIN
+        sync: false
+      # Supabase > Connect > Session pooler connection string (contains the database password).
+      - key: DATABASE_URL
+        sync: false
+      # https://<project-ref>.supabase.co
+      - key: SUPABASE_URL
+        sync: false
+      # Supabase secret key (sb_secret_...). Server only.
+      - key: SUPABASE_SECRET_KEY
+        sync: false

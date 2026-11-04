@@ -25,6 +25,43 @@ describe('parseEnv', () => {
     expect(() => parseEnv({ CORS_ORIGIN: 'not a url' })).toThrow(/CORS_ORIGIN/);
   });
 
+  it('accepts an origin copied with a trailing slash (browsers send it without one)', () => {
+    expect(parseEnv({ CORS_ORIGIN: 'https://linka.example.com/' }).CORS_ORIGIN).toEqual(['https://linka.example.com']);
+  });
+
+  it('rejects a CORS origin with a path, which could never match a browser origin', () => {
+    expect(() => parseEnv({ CORS_ORIGIN: 'https://linka.example.com/app' })).toThrow(/CORS_ORIGIN/);
+  });
+
+  describe('in production', () => {
+    const production = {
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://user:pw@db.example.com:5432/postgres',
+      SUPABASE_URL: 'https://abc.supabase.co',
+      SUPABASE_SECRET_KEY: 'sb_secret_abcdefghijklmnopqrstuvwxyz',
+    };
+
+    it('starts with every required value set', () => {
+      const env = parseEnv({ ...production, CORS_ORIGIN: 'https://linka.example.com' });
+      expect(env.CORS_ORIGIN).toEqual(['https://linka.example.com']);
+    });
+
+    // The error lists each problem as "✖ <rule>" followed by "→ at <VARIABLE>".
+    it('requires CORS_ORIGIN to be set (the localhost default would block the real site)', () => {
+      expect(() => parseEnv(production)).toThrow(/required in production\s+→ at CORS_ORIGIN/);
+      expect(() => parseEnv({ ...production, CORS_ORIGIN: '' })).toThrow(/required in production\s+→ at CORS_ORIGIN/);
+    });
+
+    it('requires https for CORS origins and SUPABASE_URL', () => {
+      expect(() => parseEnv({ ...production, CORS_ORIGIN: 'http://linka.example.com' })).toThrow(
+        /https:\/\/ in production\s+→ at CORS_ORIGIN/,
+      );
+      expect(() =>
+        parseEnv({ ...production, CORS_ORIGIN: 'https://linka.example.com', SUPABASE_URL: 'http://abc.supabase.co' }),
+      ).toThrow(/https:\/\/ in production\s+→ at SUPABASE_URL/);
+    });
+  });
+
   it('rejects a DATABASE_URL that is not a postgres connection string', () => {
     expect(() => parseEnv({ DATABASE_URL: 'mysql://user@host/db' })).toThrow(/DATABASE_URL/);
   });

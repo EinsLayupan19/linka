@@ -10,9 +10,9 @@
 | 6     | Media & file sharing                   | Complete    |
 | 7     | Voice calls                            | Complete    |
 | 8     | Video calls                            | Complete    |
-| 9     | Group chat UI                          | In review   |
-| 10    | Polish, security & scalability         | In progress |
-| 11    | Production preparation & deployment    | Not started |
+| 9     | Group chat UI                          | Complete    |
+| 10    | Polish, security & scalability         | Complete (TURN, scheduled sweep, thumbnails deferred) |
+| 11    | Production preparation & deployment    | In progress: prepared, not deployed |
 
 Also done between phases: light, dark and system themes (see [Themes](#themes)).
 
@@ -349,13 +349,44 @@ Done so far:
   leaving, additions and renames keep the version, re-added members, malformed topics); web: rejoin
   under the new version, page titles and announcements, skip link, the focusable Leave group
 
-Still to do in this phase: a TURN relay with short-lived credentials (behind the existing
+Deferred (not launch blockers): a TURN relay with short-lived credentials (behind the existing
 `GET /api/calls/ice-servers`), the upload sweep as a scheduled job instead of inside the API
-process, image thumbnails, and checking the above against the hosted project (step 16 below).
+process, image thumbnails. Checking the above against the hosted project is step 16 below and part
+of the deployment checks.
 
 Not verifiable locally: the channel version against hosted Supabase Realtime (the policies are
 tested on a local Postgres with Supabase's `realtime` schema stubbed), and rate limits behind
 Render's proxy (`TRUST_PROXY=1`).
+
+## Phase 11: Production preparation & deployment
+
+Target: Vercel Hobby (frontend) + Render Free (API) + the existing Supabase Free project, $0/month.
+Full guide: [DEPLOYMENT.md](DEPLOYMENT.md).
+
+Prepared (in the repository):
+
+- `render.yaml` (API Blueprint), `vercel.json` (build, single-page-app rewrite, asset caching,
+  security headers), `.node-version` and a bounded `engines` range (Node.js 24)
+- The API refuses to start in production without an explicit `https://` `CORS_ORIGIN`, or with
+  an `http://` `SUPABASE_URL`; CORS origins are normalized (trailing slash) and origins with a
+  path are refused
+- The frontend build fails if a `VITE_` variable is missing, not `https://` (except localhost),
+  has a path, or is a Supabase secret key (before it could be published in the bundle)
+- Server logs no longer include a failed query's parameters (message text, emails, ids):
+  `utils/describeError.ts`, used by the error handler, the health check and the clean-up jobs
+- Tests: production env rules (required variables, https, normalization, paths), the build
+  checks (missing, https, paths, secret key never printed), and that a failed query's values never
+  reach the log
+
+Verified locally: clean install (`npm ci --include=dev` with `NODE_ENV=production`) and the exact
+Render and Vercel build commands from a copy without `.env` files; the built API started in
+production mode (refuses a missing `CORS_ORIGIN`; health, CORS allow/deny, 401 and 404 shapes,
+security headers); the frontend build refuses missing variables and bakes in the configured API
+address.
+
+Not done yet (needs the owner): applying migrations `0011`-`0013` to the hosted database,
+custom SMTP, the Render and Vercel projects, Supabase Auth URLs, and every hosted check in
+DEPLOYMENT.md section 10.
 
 ## Themes
 

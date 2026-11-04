@@ -1,24 +1,10 @@
 import { z } from 'zod';
+import { looksLikeSecretKey } from './secretKey';
+
+export { looksLikeSecretKey };
 
 // Vite gives "" for variables written as "NAME=" in .env, so treat that as "not set".
 const emptyToUndefined = (value: unknown) => (value === '' ? undefined : value);
-
-/**
- * Detects Supabase keys that must never ship to the browser:
- * new-style secret keys (sb_secret_...) and legacy service_role JWTs.
- */
-export function looksLikeSecretKey(key: string): boolean {
-  if (key.startsWith('sb_secret_')) return true;
-
-  const payload = key.split('.')[1];
-  if (!payload) return false;
-  try {
-    const claims: unknown = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
-    return typeof claims === 'object' && claims !== null && 'role' in claims && claims.role === 'service_role';
-  } catch {
-    return false;
-  }
-}
 
 const envSchema = z.object({
   VITE_API_URL: z.preprocess(

@@ -5,11 +5,12 @@ import { env } from './config/env.js';
 import { closeDatabase, db } from './db/client.js';
 import { createAttachmentStore } from './services/attachments.js';
 import { createCallStore } from './services/calls.js';
+import { describeError } from './utils/describeError.js';
 
 const app = createApp();
 
 const server = app.listen(env.PORT, () => {
-  console.log(`Linka API listening on http://localhost:${env.PORT} (${env.NODE_ENV})`);
+  console.log(`Linka API listening on port ${env.PORT} (${env.NODE_ENV})`);
   if (!env.DATABASE_URL) {
     console.warn('DATABASE_URL is not set. The API runs, but database features are unavailable.');
   }
@@ -35,7 +36,7 @@ async function sweep() {
     }
     if (removed > 0) console.log(`Removed ${removed} unsent upload(s).`);
   } catch (error) {
-    console.error('Upload cleanup failed:', error instanceof Error ? error.message : error);
+    console.error(`Upload cleanup failed: ${describeError(error)}`);
   }
 }
 const firstSweep = setTimeout(sweep, 60_000);
@@ -53,7 +54,7 @@ const CALL_SWEEP_INTERVAL_MS = 30 * 1000;
 const callStore = db ? createCallStore(db) : null;
 const callSweepTimer = setInterval(() => {
   callStore?.expireStale().catch((error: unknown) => {
-    console.error('Call cleanup failed:', error instanceof Error ? error.message : error);
+    console.error(`Call cleanup failed: ${describeError(error)}`);
   });
 }, CALL_SWEEP_INTERVAL_MS);
 callSweepTimer.unref();

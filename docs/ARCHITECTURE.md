@@ -782,20 +782,43 @@ React, is about 257 kB, 82 kB gzipped).
 - Tests never read real `.env` files (Vite `envDir: false` in test mode; backend tests set their own
   variables), so they cannot hit real services.
 
-## Deployment target (Phase 10)
+## Deployment (Phase 11)
 
 ```text
-React (Vercel) -> Express API (Render) -> Supabase (Auth, PostgreSQL, Realtime, Storage)
+React (Vercel, static) -> Express API (Render, free web service) -> Supabase (Auth, PostgreSQL, Realtime, Storage)
 ```
 
-Notes collected so far:
+Step-by-step guide, environment variables per service, checks and rollback:
+[DEPLOYMENT.md](DEPLOYMENT.md). Configuration in the repository:
+
+- `render.yaml`: Render Blueprint for the API (build `npm ci --include=dev`, then shared and
+  backend; start `node backend/dist/server.js`; health check `/api/health`; Singapore, next to the
+  Supabase project in Tokyo; `NODE_ENV=production`, `TRUST_PROXY=1`; secrets entered in the
+  dashboard only).
+- `vercel.json`: builds shared and frontend from the repository root, publishes `frontend/dist`,
+  rewrites every path except `/assets/*` to `index.html` (single-page app; missing asset files
+  stay 404), caches `/assets/*` for a year, and sets security headers (`X-Frame-Options: DENY`,
+  `nosniff`, a strict referrer policy, camera and microphone for the site itself only).
+- `.node-version` (24) and `engines` `>=22.12.0 <25`, so hosts use the Node.js major the project
+  is tested on.
+
+Guards that fail fast instead of deploying something broken:
+
+- **API startup** (`config/env.ts`): in production `CORS_ORIGIN`, `DATABASE_URL`, `SUPABASE_URL` and
+  `SUPABASE_SECRET_KEY` are required, and `CORS_ORIGIN` / `SUPABASE_URL` must be `https://`.
+  Origins are normalized (`https://x.app/` becomes `https://x.app`, which is what browsers send);
+  an origin with a path is refused because it could never match.
+- **Frontend build** (`lib/buildEnv.ts`, run by `vite.config.ts` on `vite build`): the three
+  `VITE_` variables must be set (no silent `localhost` fallback in a hosted build), addresses must
+  be `https://` (except `localhost`) without a path, and a Supabase **secret** key is refused
+  before it could be bundled into public JavaScript. Messages name variables, never values.
+
+Other notes:
 
 - Render needs the Supabase **session pooler** connection string (the direct connection is IPv6 only).
-- Render's free tier sleeps when idle; the first request after that can take ~50 s.
+- Render's free tier sleeps after 15 minutes without requests; waking takes about a minute.
+  Realtime is unaffected (browsers connect to Supabase directly); API calls wait for the wake-up.
 - `GET /api/health` always returns 200 while the process is up, so a database outage does not make
   Render restart a healthy API. The body reports `status: "degraded"` instead.
-- `VITE_API_URL` must be set on Vercel; it defaults to `http://localhost:3000` otherwise.
-- Render needs `SUPABASE_SECRET_KEY` (server-only) for uploads; Vercel must never get it.
-- Render needs `TRUST_PROXY=1` (one proxy in front of the API), or every signed-out request counts
-  against the proxy's IP for rate limiting (see *Rate limits*).
-- Vercel needs an SPA rewrite so deep links (e.g. `/chats/123`) serve `index.html`.
+- Logs: unexpected errors are logged with `utils/describeError.ts`, which keeps a failed query's
+  database reason and error code but never its parameters (message text, emails, ids).

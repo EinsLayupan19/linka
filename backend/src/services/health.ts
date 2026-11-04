@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { DatabaseStatus } from '@linka/shared';
 import { db } from '../db/client.js';
+import { describeError } from '../utils/describeError.js';
 
 export async function checkDatabase(): Promise<DatabaseStatus> {
   if (!db) return 'not_configured';
@@ -10,7 +11,7 @@ export async function checkDatabase(): Promise<DatabaseStatus> {
     return 'connected';
   } catch (error) {
     // Log the reason server-side only. The client just sees "unreachable".
-    console.error('Database health check failed:', error instanceof Error ? error.message : error);
+    console.error(`Database health check failed: ${describeError(error)}`);
     return 'unreachable';
   }
 }

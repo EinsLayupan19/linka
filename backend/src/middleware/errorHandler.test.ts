@@ -1,4 +1,5 @@
 import express, { type Request, type Response } from 'express';
+import { DrizzleQueryError } from 'drizzle-orm/errors';
 import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ErrorCode } from '@linka/shared';
@@ -43,6 +44,26 @@ describe('errorHandler', () => {
     await request(appThatThrows(new Error('kaboom'))).get('/boom');
 
     expect(log).toHaveBeenCalledOnce();
+  });
+
+  it('never writes the values of a failed database query to the logs (message text, emails, ids)', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cause = Object.assign(new Error('relation "messages" does not exist'), { code: '42P01' });
+    const failed = new DrizzleQueryError(
+      'insert into "messages" ("content", "sender_id") values ($1, $2)',
+      ['my private message', 'alice@example.com'],
+      cause,
+    );
+    const res = await request(appThatThrows(failed)).get('/boom');
+
+    expect(res.status).toBe(500);
+    const logged = log.mock.calls.flat().map((part) => (part instanceof Error ? `${part.message} ${part.stack}` : String(part))).join('\n');
+    expect(logged).not.toContain('my private message');
+    expect(logged).not.toContain('alice@example.com');
+    // Still enough to diagnose: what failed and the database's own reason and code.
+    expect(logged).toContain('GET /boom');
+    expect(logged).toContain('relation "messages" does not exist');
+    expect(logged).toContain('42P01');
   });
 
   it('hands errors to Express when the response has already started', () => {

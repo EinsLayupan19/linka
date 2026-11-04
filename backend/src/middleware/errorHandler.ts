@@ -1,6 +1,7 @@
 import type { ErrorRequestHandler } from 'express';
 import { ErrorCode, type ApiErrorResponse } from '@linka/shared';
 import { AppError } from '../utils/AppError.js';
+import { describeError } from '../utils/describeError.js';
 
 // Errors thrown by express.json() carry a `type` field.
 function isBodyParserError(error: unknown): error is { type: string } {
@@ -38,8 +39,9 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, next) => {
   const { statusCode, body } = toPublicError(error);
 
   if (statusCode >= 500) {
-    // Full details stay in the server logs. Request bodies are never logged.
-    console.error(`Unhandled error on ${req.method} ${req.path}:`, error);
+    // Details stay in the server logs, never in the response. Request bodies and query values
+    // are never logged (see describeError).
+    console.error(`Unhandled error on ${req.method} ${req.path}: ${describeError(error)}`);
   }
 
   res.status(statusCode).json(body);

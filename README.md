@@ -3,9 +3,9 @@
 A real-time messaging and calling platform: 1:1 and group chats, read/delivery states, presence,
 typing indicators, file sharing, and WebRTC voice/video calls.
 
-> Status: **Phase 9 (group chat UI) in review; Phase 10 (polish, security & scalability) in
-> progress**: rate limits, group ownership and removed-member realtime fixes, code splitting,
-> accessibility. See [docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md).
+> Status: **Phase 11 (production preparation & deployment) in progress**: deployment
+> configuration and guide ready ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)), not deployed yet.
+> See [docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md).
 >
 > Built so far (tested locally; not yet verified against a hosted Supabase project): sign-up and
 > login, profiles and profile pictures, finding people by username, 1:1 conversations, group chats
@@ -106,3 +106,4 @@ Each app has its own `.env.example`. Real `.env` files are git-ignored.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the code is organised
 - [docs/DATABASE.md](docs/DATABASE.md): database and migration workflow
 - [docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md): progress per phase
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): deploying to Vercel + Render + Supabase, step by step

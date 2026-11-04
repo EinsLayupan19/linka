@@ -35,7 +35,9 @@ conversations ─────────┘
 | `0012_conversation_channel_version` | generated | `conversations.channel_version` |
 | `0013_versioned_realtime_topics` | custom | Topics `conversation:<id>:<version>` and `live:<id>:<version>`: `private.conversation_topic()`, `private.live_topic()`, `private.can_access_versioned_topic()`; the broadcast triggers publish there; removals bump the version |
 
-None are applied to a hosted database yet (no Supabase project).
+Hosted project (checked read-only on 2026-11-04): `0000`-`0010` applied; `0011`-`0013` **not yet
+applied**. The current code needs all of them; see [DEPLOYMENT.md](DEPLOYMENT.md#5-database-migrations)
+for the order and checks.
 
 ## Enums
 
