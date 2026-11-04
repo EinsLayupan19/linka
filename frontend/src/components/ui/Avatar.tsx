@@ -1,6 +1,9 @@
 import { useState } from 'react';
 
 const sizes = {
+  // The two smallest are for the overlapping faces of a group avatar (ConversationAvatar).
+  '2xs': 'size-5.5 text-[0.625rem]',
+  xs: 'size-7 text-xs',
   sm: 'size-8 text-sm',
   md: 'size-10 text-base',
   lg: 'size-14 text-xl',

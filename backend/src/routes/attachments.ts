@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { attachmentUrlsRequestSchema, ErrorCode } from '@linka/shared';
 import { authUser, requireAuth } from '../middleware/requireAuth.js';
+import type { ApiRateLimits } from '../middleware/rateLimit.js';
 import type { AttachmentStore } from '../services/attachments.js';
 import type { VerifyAccessToken } from '../services/auth.js';
 import { AppError } from '../utils/AppError.js';
@@ -16,10 +17,12 @@ const uuid = z.uuid();
 export function attachmentsRouter(deps: {
   verifyAccessToken: VerifyAccessToken | null;
   attachments: AttachmentStore | null;
+  limits: ApiRateLimits;
 }): Router {
   const router = Router();
 
-  router.use(requireAuth(deps.verifyAccessToken));
+  router.use(requireAuth(deps.verifyAccessToken, deps.limits.unauthenticated));
+  router.use(deps.limits.user);
   router.use((_req, res, next) => {
     res.set('Cache-Control', 'private, no-store');
     next();

@@ -1,7 +1,8 @@
-import type { MemberRole } from '@linka/shared';
+import type { MemberRole } from './conversation.js';
 
 /**
- * Group role rules, in one place.
+ * Group role rules, in one place. The API enforces them (backend/src/services/conversations.ts);
+ * the web client uses the same functions only to decide which actions to show.
  *
  * | Action                         | owner | admin            | member |
  * | ------------------------------ | ----- | ---------------- | ------ |

@@ -13,9 +13,10 @@ const id = '0f8fad5b-d9cb-469f-a165-70867728950e';
 const other = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
 
 describe('topics', () => {
-  it('names the user and live channels', () => {
+  it('names the user channel, and the live channel of a conversation’s current channel version', () => {
     expect(userTopic(id)).toBe(`user:${id}`);
-    expect(liveTopic(id)).toBe(`live:${id}`);
+    expect(liveTopic(id, 0)).toBe(`live:${id}:0`);
+    expect(liveTopic(id, 12)).toBe(`live:${id}:12`);
   });
 });
 

@@ -75,7 +75,7 @@ describe('receipts', () => {
 
     await markers.markRead(b, id, { lastReadAt: message.createdAt });
 
-    const receipts = await t.broadcastsOn(conversationTopic(id), RECEIPT_UPDATED_EVENT);
+    const receipts = await t.broadcastsOn(conversationTopic(id, 0), RECEIPT_UPDATED_EVENT);
     expect(receipts.map((e) => receiptUpdatedEventSchema.parse(e.payload))).toEqual([
       { conversationId: id, userId: b, lastDeliveredAt: message.createdAt, lastReadAt: message.createdAt },
     ]);
@@ -93,7 +93,7 @@ describe('receipts', () => {
     await markers.markRead(b, id, { lastReadAt: message.createdAt });
     await markers.markDelivered(b, { conversations: [{ conversationId: id, lastDeliveredAt: message.createdAt }] });
 
-    expect(await t.broadcastsOn(conversationTopic(id), RECEIPT_UPDATED_EVENT)).toHaveLength(1);
+    expect(await t.broadcastsOn(conversationTopic(id, 0), RECEIPT_UPDATED_EVENT)).toHaveLength(1);
   });
 
   it('publishes delivery-only changes without a read event', async () => {
@@ -101,7 +101,7 @@ describe('receipts', () => {
     const message = await send(a, id);
     await markers.markDelivered(b, { conversations: [{ conversationId: id, lastDeliveredAt: message.createdAt }] });
 
-    const receipts = await t.broadcastsOn(conversationTopic(id), RECEIPT_UPDATED_EVENT);
+    const receipts = await t.broadcastsOn(conversationTopic(id, 0), RECEIPT_UPDATED_EVENT);
     expect(receiptUpdatedEventSchema.parse(receipts[0]!.payload)).toMatchObject({ lastDeliveredAt: message.createdAt, lastReadAt: null });
     expect(await t.broadcastsOn(userTopic(b), CONVERSATION_READ_EVENT)).toEqual([]);
   });
@@ -118,7 +118,7 @@ describe('membership changes', () => {
         { conversationId: conversation.id, change: 'added' },
       ]);
     }
-    expect(await t.broadcastsOn(conversationTopic(conversation.id), CONVERSATION_UPDATED_EVENT)).toHaveLength(1);
+    expect(await t.broadcastsOn(conversationTopic(conversation.id, 0), CONVERSATION_UPDATED_EVENT)).toHaveLength(1);
   });
 
   it('tells a removed member, and anyone viewing', async () => {
@@ -128,7 +128,7 @@ describe('membership changes', () => {
 
     const changes = (await t.broadcastsOn(userTopic(x), CONVERSATION_CHANGED_EVENT)).map((e) => e.payload);
     expect(changes).toContainEqual({ conversationId: conversation.id, change: 'removed' });
-    expect(await t.broadcastsOn(conversationTopic(conversation.id), CONVERSATION_UPDATED_EVENT)).toHaveLength(2);
+    expect(await t.broadcastsOn(conversationTopic(conversation.id, 0), CONVERSATION_UPDATED_EVENT)).toHaveLength(2);
   });
 
   it('announces role changes and renames', async () => {
@@ -137,16 +137,16 @@ describe('membership changes', () => {
     await conversations.updateMemberRole(owner, conversation.id, x, 'admin');
     await conversations.rename(owner, conversation.id, { name: 'Renamed' });
 
-    expect(await t.broadcastsOn(conversationTopic(conversation.id), CONVERSATION_UPDATED_EVENT)).toHaveLength(3);
+    expect(await t.broadcastsOn(conversationTopic(conversation.id, 0), CONVERSATION_UPDATED_EVENT)).toHaveLength(3);
     const changes = (await t.broadcastsOn(userTopic(x), CONVERSATION_CHANGED_EVENT)).map((e) => e.payload);
     expect(changes).toContainEqual({ conversationId: conversation.id, change: 'updated' });
   });
 
   it('a message bumping the conversation’s activity is not announced as an update', async () => {
     const { a, id } = await pair();
-    const before = (await t.broadcastsOn(conversationTopic(id), CONVERSATION_UPDATED_EVENT)).length;
+    const before = (await t.broadcastsOn(conversationTopic(id, 0), CONVERSATION_UPDATED_EVENT)).length;
     await send(a, id);
-    expect(await t.broadcastsOn(conversationTopic(id), CONVERSATION_UPDATED_EVENT)).toHaveLength(before);
+    expect(await t.broadcastsOn(conversationTopic(id, 0), CONVERSATION_UPDATED_EVENT)).toHaveLength(before);
   });
 });
 
@@ -194,12 +194,12 @@ describe('who may join and publish', () => {
     const { a, id } = await pair();
     const outsider = await t.createUser();
     for (const extension of ['broadcast', 'presence'] as const) {
-      expect(await t.canJoinTopic('authenticated', a, liveTopic(id), extension), extension).toBe(true);
-      expect(await t.canPublishOnTopic('authenticated', a, liveTopic(id), extension), extension).toBe(true);
-      expect(await t.canJoinTopic('authenticated', outsider, liveTopic(id), extension), extension).toBe(false);
-      expect(await t.canPublishOnTopic('authenticated', outsider, liveTopic(id), extension), extension).toBe(false);
+      expect(await t.canJoinTopic('authenticated', a, liveTopic(id, 0), extension), extension).toBe(true);
+      expect(await t.canPublishOnTopic('authenticated', a, liveTopic(id, 0), extension), extension).toBe(true);
+      expect(await t.canJoinTopic('authenticated', outsider, liveTopic(id, 0), extension), extension).toBe(false);
+      expect(await t.canPublishOnTopic('authenticated', outsider, liveTopic(id, 0), extension), extension).toBe(false);
     }
-    expect(await t.canJoinTopic('anon', null, liveTopic(id), 'presence')).toBe(false);
+    expect(await t.canJoinTopic('anon', null, liveTopic(id, 0), 'presence')).toBe(false);
   });
 
   it('live:<id>: malformed topics are denied', async () => {
@@ -211,15 +211,18 @@ describe('who may join and publish', () => {
 
   it('conversation:<id> stays database-only: members still cannot publish, nor use presence there', async () => {
     const { a, id } = await pair();
-    expect(await t.canJoinTopic('authenticated', a, conversationTopic(id))).toBe(true);
-    expect(await t.canPublishOnTopic('authenticated', a, conversationTopic(id))).toBe(false);
-    expect(await t.canJoinTopic('authenticated', a, conversationTopic(id), 'presence')).toBe(false);
+    expect(await t.canJoinTopic('authenticated', a, conversationTopic(id, 0))).toBe(true);
+    expect(await t.canPublishOnTopic('authenticated', a, conversationTopic(id, 0))).toBe(false);
+    expect(await t.canJoinTopic('authenticated', a, conversationTopic(id, 0), 'presence')).toBe(false);
   });
 
   it('a member who leaves loses the live channel', async () => {
     const [owner, x] = [await t.createUser(), await t.createUser()];
     const { conversation } = await conversations.create(owner, { type: 'group', name: 'Team', memberIds: [x] });
     await conversations.removeMember(x, conversation.id, x);
-    expect(await t.canJoinTopic('authenticated', x, liveTopic(conversation.id), 'presence')).toBe(false);
+    for (const version of [0, 1]) {
+      expect(await t.canJoinTopic('authenticated', x, liveTopic(conversation.id, version), 'presence')).toBe(false);
+    }
+    expect(await t.canJoinTopic('authenticated', owner, liveTopic(conversation.id, 1), 'presence')).toBe(true);
   });
 });

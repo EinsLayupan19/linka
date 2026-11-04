@@ -9,13 +9,13 @@ vi.mock('../lib/supabase', async () => (await import('../test/supabaseMock')).su
 
 function subscribe() {
   const handlers = { onMessage: vi.fn(), onStatus: vi.fn(), onJoined: vi.fn() };
-  const unsubscribe = subscribeToConversation(CONVERSATION_ID, handlers);
+  const unsubscribe = subscribeToConversation(CONVERSATION_ID, 0, handlers);
   return { handlers, unsubscribe };
 }
 
 /** Waits until the channel has subscribed (setAuth resolves first). */
 async function joinedChannel() {
-  const channel = latestChannel(conversationTopic(CONVERSATION_ID));
+  const channel = latestChannel(conversationTopic(CONVERSATION_ID, 0));
   await waitFor(() => expect(realtimeMock.setAuth).toHaveBeenCalled());
   await Promise.resolve();
   return channel;
@@ -26,7 +26,7 @@ describe('subscribeToConversation', () => {
     subscribe();
     const channel = await joinedChannel();
 
-    expect(channel.topic).toBe(`conversation:${CONVERSATION_ID}`);
+    expect(channel.topic).toBe(`conversation:${CONVERSATION_ID}:0`);
     expect(channel.options).toEqual({ config: { private: true } });
     expect(realtimeMock.channel).toHaveBeenCalledOnce();
   });

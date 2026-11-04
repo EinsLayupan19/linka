@@ -1,52 +1,25 @@
-import { useEffect, useId, useState } from 'react';
+import { useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { USER_SEARCH_MIN_LENGTH, type UserSummary } from '@linka/shared';
+import type { UserSummary } from '@linka/shared';
 import { Avatar } from '../components/ui/Avatar';
 import { Alert } from '../components/ui/Alert';
+import { secondaryButtonClassName } from '../components/ui/Button';
 import { useChats } from '../hooks/useChats';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { useUserSearch } from '../hooks/useUserSearch';
 import { toApiError } from '../lib/api';
 import { startDirectConversation } from '../services/conversations';
-import { searchUsers } from '../services/users';
 
-const SEARCH_DELAY_MS = 250;
-
-type SearchState =
-  | { status: 'idle' }
-  | { status: 'loading' }
-  | { status: 'ready'; users: UserSummary[] }
-  | { status: 'error'; message: string };
-
-/** Find someone by username and open the 1:1 conversation with them. */
+/** Find someone by username and open the 1:1 conversation with them (or start a group). */
 export function NewChat() {
+  useDocumentTitle('New chat');
   const navigate = useNavigate();
   const { upsertConversation } = useChats();
   const inputId = useId();
   const [query, setQuery] = useState('');
-  const [search, setSearch] = useState<SearchState>({ status: 'idle' });
+  const { term, results } = useUserSearch(query);
   const [starting, setStarting] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
-
-  const term = query.trim();
-  const searchable = term.length >= USER_SEARCH_MIN_LENGTH;
-
-  // Search while typing, after a short pause, cancelling the previous request.
-  useEffect(() => {
-    if (!searchable) return;
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      setSearch({ status: 'loading' });
-      searchUsers(term, controller.signal).then(
-        (users) => setSearch({ status: 'ready', users }),
-        (error: unknown) => {
-          if (!controller.signal.aborted) setSearch({ status: 'error', message: toApiError(error).message });
-        },
-      );
-    }, SEARCH_DELAY_MS);
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [term, searchable]);
 
   async function start(user: UserSummary) {
     setStarting(user.id);
@@ -61,8 +34,6 @@ export function NewChat() {
     }
   }
 
-  const results = searchable ? search : ({ status: 'idle' } as const);
-
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-center gap-3 border-b border-line px-4 py-3">
@@ -72,7 +43,10 @@ export function NewChat() {
         >
           Back
         </Link>
-        <h1 className="font-semibold">New chat</h1>
+        <h1 className="flex-1 font-semibold">New chat</h1>
+        <Link to="/conversations/new/group" className={`${secondaryButtonClassName} h-9 px-3`}>
+          New group
+        </Link>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -88,7 +62,7 @@ export function NewChat() {
             spellCheck={false}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="h-10 w-full rounded-lg border border-line bg-surface px-3 text-base text-ink placeholder:text-ink-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent sm:text-sm"
+            className="h-10 w-full rounded-lg border border-field bg-surface px-3 text-base text-ink placeholder:text-ink-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent sm:text-sm"
             placeholder="Start typing a username"
           />
           <p className="text-sm text-ink-muted">Search by username. Email addresses are never searchable.</p>

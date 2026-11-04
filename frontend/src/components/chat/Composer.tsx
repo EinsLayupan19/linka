@@ -228,7 +228,7 @@ export function Composer({
           className={
             'field-sizing-content max-h-40 min-h-10 min-w-0 flex-1 resize-none rounded-lg border bg-surface px-3 py-2 text-base text-ink sm:text-sm ' +
             'placeholder:text-ink-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent disabled:opacity-60 ' +
-            (error ? 'border-danger' : 'border-line')
+            (error ? 'border-danger' : 'border-field')
           }
         />
         <Button type="submit" disabled={!canSend}>

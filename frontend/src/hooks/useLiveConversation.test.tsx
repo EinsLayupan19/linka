@@ -15,7 +15,7 @@ const members = new Set([TEST_USER_ID, OTHER_USER_ID, MARIA, ANA]);
 const typing = (userId: string, isTyping = true) => ({ conversationId: CONVERSATION_ID, userId, typing: isTyping });
 
 async function renderLive(enabled = true) {
-  const hook = renderHook(({ on }) => useLiveConversation(CONVERSATION_ID, TEST_USER_ID, members, on), {
+  const hook = renderHook(({ on }) => useLiveConversation(CONVERSATION_ID, 0, TEST_USER_ID, members, on), {
     initialProps: { on: enabled },
   });
   // setAuth resolves, then the channel subscribes.
@@ -26,7 +26,7 @@ async function renderLive(enabled = true) {
   return hook;
 }
 
-const channel = () => latestChannel(liveTopic(CONVERSATION_ID));
+const channel = () => latestChannel(liveTopic(CONVERSATION_ID, 0));
 const joinLive = () => act(() => channel().join());
 
 beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
@@ -71,7 +71,7 @@ describe('presence', () => {
 
   it('does not join before access is confirmed', async () => {
     await renderLive(false);
-    expect(realtimeChannels.filter((c) => c.topic === liveTopic(CONVERSATION_ID))).toHaveLength(0);
+    expect(realtimeChannels.filter((c) => c.topic === liveTopic(CONVERSATION_ID, 0))).toHaveLength(0);
   });
 });
 

@@ -59,6 +59,10 @@ const envSchema = z
     // WebRTC STUN/TURN servers as JSON, e.g. [{"urls":"stun:stun.example.com:3478"}]. TURN
     // credentials put here are sent to signed-in browsers (that is how TURN works); prefer a
     // provider's short-lived credentials when TURN is added.
+    // How many reverse proxies sit in front of the API (Render: 1). Express then takes the client's
+    // IP from X-Forwarded-For past exactly that many hops; rate limits without a valid sign-in are
+    // per IP. 0 trusts nobody (local development): the header is ignored and cannot be spoofed.
+    TRUST_PROXY: z.preprocess(emptyToUndefined, z.coerce.number().int().min(0).max(10).default(0)),
     ICE_SERVERS: z.preprocess(
       parseJson,
       z.array(iceServerSchema, 'must be a JSON array of ICE servers').min(1).default(DEFAULT_ICE_SERVERS),

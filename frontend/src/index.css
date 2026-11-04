@@ -16,6 +16,9 @@
   --color-ink: #18181b;
   --color-ink-muted: #52525b;
   --color-line: #e4e4e7;
+  /* Borders of text fields: the only thing that shows where to type, so at least 3:1 against
+     canvas and surface (WCAG 1.4.11). Decorative dividers keep the softer line color. */
+  --color-field: #84848d;
   --color-skeleton: #e4e4e7;
 
   --color-accent: #0f766e;
@@ -35,6 +38,15 @@
       transform: translateY(0.5rem);
     }
   }
+
+  /* Dialogs (opened on purpose, a few times a session): the same short rise. Instant close. */
+  --animate-dialog-in: dialog-in 180ms var(--ease-out-quick);
+  @keyframes dialog-in {
+    from {
+      opacity: 0;
+      transform: translateY(0.5rem) scale(0.98);
+    }
+  }
 }
 
 :root {
@@ -49,6 +61,7 @@
   --color-ink: #e8eef5;
   --color-ink-muted: #b0bdcb;
   --color-line: #3a4858;
+  --color-field: #6b7d90;
   --color-skeleton: #3a4858;
 
   --color-accent: #5eead4;

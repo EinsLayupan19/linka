@@ -10,6 +10,21 @@ export default defineConfig(({ mode }) => ({
     port: 5173,
     strictPort: true,
   },
+  build: {
+    rolldownOptions: {
+      output: {
+        // Libraries in their own files: they change far less often than Linka's code, so browsers
+        // keep them cached across releases. (Splitting by page is in App.tsx.)
+        codeSplitting: {
+          groups: [
+            { name: 'react', test: /node_modules[\\/](react|react-dom|react-router|scheduler)[\\/]/ },
+            { name: 'supabase', test: /node_modules[\\/](@supabase|tslib|iceberg-js)[\\/]/ },
+            { name: 'zod', test: /node_modules[\\/]zod[\\/]/ },
+          ],
+        },
+      },
+    },
+  },
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],

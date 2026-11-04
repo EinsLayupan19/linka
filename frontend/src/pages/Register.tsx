@@ -4,6 +4,7 @@ import { PASSWORD_MIN_LENGTH, registerSchema } from '@linka/shared';
 import { Alert } from '../components/ui/Alert';
 import { Button } from '../components/ui/Button';
 import { TextField } from '../components/ui/TextField';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { signUp } from '../services/auth';
 import { fieldErrors } from '../utils/formErrors';
@@ -11,6 +12,7 @@ import { fieldErrors } from '../utils/formErrors';
 const linkClassName = 'font-medium text-accent underline-offset-4 hover:underline';
 
 export function Register() {
+  useDocumentTitle('Create your account');
   const [values, setValues] = useState({ email: '', password: '', confirmPassword: '' });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);

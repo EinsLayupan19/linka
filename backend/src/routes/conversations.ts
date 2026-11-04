@@ -13,6 +13,7 @@ import {
   updateMemberRoleSchema,
 } from '@linka/shared';
 import { authUser, requireAuth } from '../middleware/requireAuth.js';
+import type { ApiRateLimits } from '../middleware/rateLimit.js';
 import type { AttachmentStore } from '../services/attachments.js';
 import type { VerifyAccessToken } from '../services/auth.js';
 import type { ConversationStore } from '../services/conversations.js';
@@ -34,10 +35,12 @@ export function conversationsRouter(deps: {
   messages: MessageStore | null;
   markers: MarkerStore | null;
   attachments: AttachmentStore | null;
+  limits: ApiRateLimits;
 }): Router {
   const router = Router();
 
-  router.use(requireAuth(deps.verifyAccessToken));
+  router.use(requireAuth(deps.verifyAccessToken, deps.limits.unauthenticated));
+  router.use(deps.limits.user);
   router.use((_req, res, next) => {
     res.set('Cache-Control', 'private, no-store');
     next();
@@ -78,7 +81,7 @@ export function conversationsRouter(deps: {
     res.json({ conversations: await store().listForUser(authUser(req).userId) });
   });
 
-  router.post('/', async (req, res) => {
+  router.post('/', deps.limits.createConversation, async (req, res) => {
     const input = parseBody(createConversationSchema, req.body);
     const { conversation, created } = await store().create(authUser(req).userId, input);
     // 200 with the existing conversation when a 1:1 conversation already exists.
@@ -95,17 +98,17 @@ export function conversationsRouter(deps: {
     res.json(await store().getForUser(authUser(req).userId, conversationId(req.params.conversationId)));
   });
 
-  router.patch('/:conversationId', async (req, res) => {
+  router.patch('/:conversationId', deps.limits.manageGroup, async (req, res) => {
     const input = parseBody(updateConversationSchema, req.body);
     res.json(await store().rename(authUser(req).userId, conversationId(req.params.conversationId), input));
   });
 
-  router.post('/:conversationId/members', async (req, res) => {
+  router.post('/:conversationId/members', deps.limits.manageGroup, async (req, res) => {
     const input = parseBody(addMembersSchema, req.body);
     res.json(await store().addMembers(authUser(req).userId, conversationId(req.params.conversationId), input));
   });
 
-  router.patch('/:conversationId/members/:userId', async (req, res) => {
+  router.patch('/:conversationId/members/:userId', deps.limits.manageGroup, async (req, res) => {
     const { role } = parseBody(updateMemberRoleSchema, req.body);
     const id = conversationId(req.params.conversationId);
     res.json(await store().updateMemberRole(authUser(req).userId, id, memberId(req.params.userId), role));
@@ -121,7 +124,7 @@ export function conversationsRouter(deps: {
   // Send a text message. The API is the only way messages are written; the database then
   // broadcasts it to the conversation's realtime channel. A retry with the same clientId
   // returns the original message with 200 instead of creating a duplicate.
-  router.post('/:conversationId/messages', async (req, res) => {
+  router.post('/:conversationId/messages', deps.limits.sendMessage, async (req, res) => {
     const input = parseBody(createMessageSchema, req.body);
     const id = conversationId(req.params.conversationId);
     const { message, created } = await messageStore().create(authUser(req).userId, id, input);
@@ -130,7 +133,7 @@ export function conversationsRouter(deps: {
 
   // Start uploading a file to this conversation: returns a single-use upload URL for a path the
   // server chose. 201 when new; 200 for a retry with the same clientId.
-  router.post('/:conversationId/attachments', async (req, res) => {
+  router.post('/:conversationId/attachments', deps.limits.uploads, async (req, res) => {
     const input = parseBody(createAttachmentUploadSchema, req.body);
     const id = conversationId(req.params.conversationId);
     if (!deps.attachments) throw databaseUnavailable();
@@ -146,7 +149,7 @@ export function conversationsRouter(deps: {
   });
 
   // Remove a member, or leave the group when :userId is yourself.
-  router.delete('/:conversationId/members/:userId', async (req, res) => {
+  router.delete('/:conversationId/members/:userId', deps.limits.manageGroup, async (req, res) => {
     const id = conversationId(req.params.conversationId);
     await store().removeMember(authUser(req).userId, id, memberId(req.params.userId));
     res.status(204).end();

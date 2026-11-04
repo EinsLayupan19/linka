@@ -3,10 +3,14 @@
 A real-time messaging and calling platform: 1:1 and group chats, read/delivery states, presence,
 typing indicators, file sharing, and WebRTC voice/video calls.
 
-> Status: **Phase 8 (video calls)**. See [docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md).
+> Status: **Phase 9 (group chat UI) in review; Phase 10 (polish, security & scalability) in
+> progress**: rate limits, group ownership and removed-member realtime fixes, code splitting,
+> accessibility. See [docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md).
 >
 > Built so far (tested locally; not yet verified against a hosted Supabase project): sign-up and
-> login, profiles and profile pictures, finding people by username, 1:1 conversations, sending text
+> login, profiles and profile pictures, finding people by username, 1:1 conversations, group chats
+> (create, rename, add and remove people, admins, ownership transfer, leave;
+> [group chats](docs/ARCHITECTURE.md#group-chats-phase-9)), sending text
 > messages, images and files, live delivery, paging through history, delivered/read receipts,
 > unread counts, a live conversation list, online/last seen, and typing indicators. Realtime uses
 > Supabase Broadcast from Database and Presence on private channels
@@ -92,7 +96,8 @@ Each app has its own `.env.example`. Real `.env` files are git-ignored.
   bundle. The app refuses to start if a Supabase secret key is put here.
 - `backend/.env`: server-side values such as `DATABASE_URL` and `SUPABASE_URL` (used with the
   project's public signing keys to verify access tokens), and `SUPABASE_SECRET_KEY` for file
-  storage (and optionally `ICE_SERVERS`, STUN/TURN servers for calls). The secret key is **server-only**: it never goes in `frontend/.env`, the browser, logs or
+  storage (and optionally `ICE_SERVERS`, STUN/TURN servers for calls, and `TRUST_PROXY`, the
+  number of proxies in front of the API for rate limiting: `0` locally, `1` on Render). The secret key is **server-only**: it never goes in `frontend/.env`, the browser, logs or
   Git. Without it the app runs, but uploads and profile pictures answer "not configured".
 
 ## Documentation

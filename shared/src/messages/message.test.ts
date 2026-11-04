@@ -34,9 +34,12 @@ describe('compareMessages', () => {
 });
 
 describe('conversationTopic', () => {
-  it('names the private channel of a conversation', () => {
-    expect(conversationTopic('0f8fad5b-d9cb-469f-a165-70867728950e')).toBe(
-      'conversation:0f8fad5b-d9cb-469f-a165-70867728950e',
+  it('names the private channel of a conversation, per channel version', () => {
+    expect(conversationTopic('0f8fad5b-d9cb-469f-a165-70867728950e', 0)).toBe(
+      'conversation:0f8fad5b-d9cb-469f-a165-70867728950e:0',
+    );
+    expect(conversationTopic('0f8fad5b-d9cb-469f-a165-70867728950e', 3)).toBe(
+      'conversation:0f8fad5b-d9cb-469f-a165-70867728950e:3',
     );
   });
 });

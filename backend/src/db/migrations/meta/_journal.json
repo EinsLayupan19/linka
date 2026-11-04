@@ -78,6 +78,27 @@
       "when": 1792688681542,
       "tag": "0010_call_signaling",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793755410956,
+      "tag": "0011_group_owner_invariant",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793756848549,
+      "tag": "0012_conversation_channel_version",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793756857300,
+      "tag": "0013_versioned_realtime_topics",
+      "breakpoints": true
     }
   ]
 }

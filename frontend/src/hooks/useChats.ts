@@ -23,8 +23,10 @@ export interface ChatsContextValue {
   refresh: () => void;
   /** A message was sent or received in this tab: update its conversation's preview. */
   applyMessage: (message: Message) => void;
-  /** A conversation was opened or created. */
+  /** A conversation was opened, created or changed (e.g. a group renamed). */
   upsertConversation: (conversation: Conversation) => void;
+  /** The user is no longer in this conversation (they left the group or were removed). */
+  removeConversation: (conversationId: string) => void;
   /** The user's read marker moved (this tab or another): update the unread count. */
   applyRead: (conversationId: string, lastReadAt: string) => void;
   /** Batches delivery receipts for every conversation. */
@@ -192,17 +194,21 @@ export function useConversationList(
     });
   }, []);
 
+  const removeConversation = useCallback((conversationId: string) => {
+    counted.current.delete(conversationId);
+    setList((current) =>
+      current.status === 'ready'
+        ? { status: 'ready', conversations: current.conversations.filter((c) => c.id !== conversationId) }
+        : current,
+    );
+  }, []);
+
   const onChanged = useCallback(
     (event: ConversationChangedEvent) => {
       if (event.change !== 'removed') return refresh();
-      counted.current.delete(event.conversationId);
-      setList((current) =>
-        current.status === 'ready'
-          ? { status: 'ready', conversations: current.conversations.filter((c) => c.id !== event.conversationId) }
-          : current,
-      );
+      removeConversation(event.conversationId);
     },
-    [refresh],
+    [refresh, removeConversation],
   );
 
   // One live subscription for the whole list.
@@ -224,7 +230,7 @@ export function useConversationList(
     });
   }, [myUserId, showMessage, applyRead, onChanged, refresh, delivery]);
 
-  return { list, listStatus, refresh, applyMessage, upsertConversation, applyRead, delivery };
+  return { list, listStatus, refresh, applyMessage, upsertConversation, removeConversation, applyRead, delivery };
 }
 
 export const ChatsContext = createContext<ChatsContextValue | null>(null);

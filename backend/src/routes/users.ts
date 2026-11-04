@@ -8,6 +8,7 @@ import {
   userSearchQuerySchema,
 } from '@linka/shared';
 import { authUser, requireAuth } from '../middleware/requireAuth.js';
+import type { ApiRateLimits } from '../middleware/rateLimit.js';
 import type { VerifyAccessToken } from '../services/auth.js';
 import type { ProfileStore } from '../services/profiles.js';
 import { AppError } from '../utils/AppError.js';
@@ -21,10 +22,12 @@ import { parseBody } from '../validation/parseBody.js';
 export function usersRouter(deps: {
   verifyAccessToken: VerifyAccessToken | null;
   profiles: ProfileStore | null;
+  limits: ApiRateLimits;
 }): Router {
   const router = Router();
 
-  router.use(requireAuth(deps.verifyAccessToken));
+  router.use(requireAuth(deps.verifyAccessToken, deps.limits.unauthenticated));
+  router.use(deps.limits.user);
   router.use((_req, res, next) => {
     // Personal data: never cache in shared caches or the browser.
     res.set('Cache-Control', 'private, no-store');
@@ -40,7 +43,7 @@ export function usersRouter(deps: {
 
   // Username-based discovery: prefix match, signed-in users only, small result set,
   // public fields only (never email).
-  router.get('/search', async (req, res) => {
+  router.get('/search', deps.limits.userSearch, async (req, res) => {
     const { q } = parseBody(userSearchQuerySchema, req.query);
     const users = await profiles().searchByUsername(q, { excludeUserId: authUser(req).userId, limit: USER_SEARCH_LIMIT });
     res.json({ users });
@@ -57,6 +60,7 @@ export function usersRouter(deps: {
   // here, capped at the avatar limit.
   router.put(
     '/me/avatar',
+    deps.limits.uploads,
     express.raw({ type: () => true, limit: MAX_AVATAR_BYTES }),
     async (req, res) => {
       const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);

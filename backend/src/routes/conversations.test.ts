@@ -370,3 +370,69 @@ describe('roles and ownership', () => {
     expect((await owner.patch(`/api/conversations/${conversation.id}/members/${member.id}`, { role: 'superuser' })).status).toBe(400);
   });
 });
+
+describe('racing ownership changes', () => {
+  /** The group's owners, read straight from the database. */
+  async function owners(conversationId: string): Promise<string[]> {
+    const { rows } = await t.client.query<{ user_id: string }>(
+      "select user_id from conversation_members where conversation_id = $1 and role = 'owner'",
+      [conversationId],
+    );
+    return rows.map((r) => r.user_id);
+  }
+
+  // Both requests are sent at once. The test database runs one statement at a time, so whether
+  // the dangerous ordering happens here is up to timing: these check that racing requests always
+  // end in clean answers and one owner. services/groupOwnership.test.ts forces the exact orderings.
+  const ROUNDS = 4;
+
+  it('a transfer racing the new owner’s removal never leaves the group without an owner', async () => {
+    for (let round = 0; round < ROUNDS; round++) {
+      const [owner, member] = await Promise.all([user(), user()]);
+      const { id } = await group(owner, [member]);
+      const path = `/api/conversations/${id}/members/${member.id}`;
+
+      const requests = [owner.patch(path, { role: 'owner' }), owner.delete(path)];
+      const [transfer, removal] = round % 2 === 0 ? await Promise.all(requests) : (await Promise.all(requests.reverse())).reverse();
+
+      // One wins; the other gets a clean answer, never a server error.
+      expect([200, 404, 409]).toContain(transfer!.status);
+      expect([204, 403, 404, 409]).toContain(removal!.status);
+      const remaining = await owners(id);
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]).toBe(transfer!.status === 200 ? member.id : owner.id);
+    }
+  });
+
+  it('a member leaving while being made owner never leaves the group without an owner', async () => {
+    for (let round = 0; round < ROUNDS; round++) {
+      const [owner, member] = await Promise.all([user(), user()]);
+      const { id } = await group(owner, [member]);
+      const path = `/api/conversations/${id}/members/${member.id}`;
+
+      const requests = [owner.patch(path, { role: 'owner' }), member.delete(path)];
+      const [transfer, leave] = round % 2 === 0 ? await Promise.all(requests) : (await Promise.all(requests.reverse())).reverse();
+
+      expect([200, 404, 409]).toContain(transfer!.status);
+      expect([204, 409]).toContain(leave!.status);
+      // Whoever won, exactly one owner is left, and it is someone who is still in the group.
+      const remaining = await owners(id);
+      expect(remaining).toHaveLength(1);
+      if (leave!.status === 204) expect(remaining).toEqual([owner.id]);
+    }
+  });
+
+  it('two transfers at once from the same owner leave exactly one owner', async () => {
+    for (let round = 0; round < ROUNDS; round++) {
+      const [owner, a, b] = await Promise.all([user(), user(), user()]);
+      const { id } = await group(owner, [a, b]);
+      const results = await Promise.all([
+        owner.patch(`/api/conversations/${id}/members/${a.id}`, { role: 'owner' }),
+        owner.patch(`/api/conversations/${id}/members/${b.id}`, { role: 'owner' }),
+      ]);
+      // The second sees that its sender is no longer the owner.
+      expect(results.map((r) => r.status).sort()).toEqual([200, 403]);
+      expect(await owners(id)).toHaveLength(1);
+    }
+  });
+});

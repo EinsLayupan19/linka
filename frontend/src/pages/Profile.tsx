@@ -6,6 +6,7 @@ import { Alert } from '../components/ui/Alert';
 import { Button } from '../components/ui/Button';
 import { TextField } from '../components/ui/TextField';
 import { useAuth } from '../hooks/useAuth';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useProfile } from '../hooks/useProfile';
 import { ApiError } from '../lib/api';
 import { updateMyProfile } from '../services/profiles';
@@ -14,6 +15,7 @@ import { fieldErrors } from '../utils/formErrors';
 const memberSince = new Intl.DateTimeFormat(undefined, { dateStyle: 'long' });
 
 export function Profile() {
+  useDocumentTitle('Profile');
   const { profile, setProfile } = useProfile();
   const { state } = useAuth();
   const email = state.status === 'signed_in' ? state.session.user.email : undefined;

@@ -98,6 +98,8 @@ export const conversationSchema = z.object({
   /** Last activity: a new message or a change to the conversation. Lists are sorted by it. */
   updatedAt: z.iso.datetime({ offset: true }),
   members: z.array(conversationMemberSchema),
+  /** Which realtime topics to join (conversation:<id>:<v>, live:<id>:<v>); changes when someone leaves. */
+  channelVersion: z.number().int().min(0),
   /** The newest message, for list previews; null when there are none. */
   lastMessage: messageSchema.nullable(),
   /**

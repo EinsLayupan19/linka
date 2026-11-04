@@ -7,18 +7,24 @@ import { messageSchema } from '../messages/message.js';
  *
  * | Topic                 | Joins           | Publishes      | Events                                            |
  * | --------------------- | --------------- | -------------- | ------------------------------------------------- |
- * | conversation:<id>     | members         | database only  | message.created, receipt.updated, conversation.updated |
- * | live:<id>             | members         | members        | typing (broadcast), presence                      |
+ * | conversation:<id>:<v> | members         | database only  | message.created, receipt.updated, conversation.updated |
+ * | live:<id>:<v>         | members         | members        | typing (broadcast), presence                      |
  * | user:<userId>         | that user only  | database only  | conversation.activity, conversation.read, conversation.changed, call.updated |
  * | call:<callId>         | the call's participants, while it rings or is active | those participants | signal (WebRTC offer/answer/ICE) |
  *
  * Server events and member-published events live on different topics on purpose: Supabase
  * authorizes publishing per channel join, not per event, so a channel members may publish on
  * could otherwise carry forged server events.
+ *
+ * <v> is the conversation's `channelVersion`. Supabase checks who may join a channel only when they
+ * join, so someone removed from a group would keep receiving on a channel they had already joined.
+ * Removing anyone therefore bumps the version: the database publishes on the new topics only, and
+ * joining those needs current membership. Clients join the version their latest Conversation says.
  */
 
-export const conversationTopic = (conversationId: string) => `conversation:${conversationId}`;
-export const liveTopic = (conversationId: string) => `live:${conversationId}`;
+export const conversationTopic = (conversationId: string, channelVersion: number) =>
+  `conversation:${conversationId}:${channelVersion}`;
+export const liveTopic = (conversationId: string, channelVersion: number) => `live:${conversationId}:${channelVersion}`;
 export const userTopic = (userId: string) => `user:${userId}`;
 export const callTopic = (callId: string) => `call:${callId}`;
 

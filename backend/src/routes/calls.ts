@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { createCallSchema, ErrorCode, type IceServer } from '@linka/shared';
 import { authUser, requireAuth } from '../middleware/requireAuth.js';
+import type { ApiRateLimits } from '../middleware/rateLimit.js';
 import type { VerifyAccessToken } from '../services/auth.js';
 import type { CallStore } from '../services/calls.js';
 import { AppError } from '../utils/AppError.js';
@@ -18,10 +19,12 @@ export function callsRouter(deps: {
   verifyAccessToken: VerifyAccessToken | null;
   calls: CallStore | null;
   iceServers: IceServer[];
+  limits: ApiRateLimits;
 }): Router {
   const router = Router();
 
-  router.use(requireAuth(deps.verifyAccessToken));
+  router.use(requireAuth(deps.verifyAccessToken, deps.limits.unauthenticated));
+  router.use(deps.limits.user);
   router.use((_req, res, next) => {
     res.set('Cache-Control', 'private, no-store');
     next();
@@ -39,7 +42,7 @@ export function callsRouter(deps: {
     return parsed.data;
   }
 
-  router.post('/', async (req, res) => {
+  router.post('/', deps.limits.startCall, async (req, res) => {
     const { conversationId, type } = parseBody(createCallSchema, req.body);
     res.status(201).json(await store().start(authUser(req).userId, conversationId, type));
   });

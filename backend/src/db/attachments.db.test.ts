@@ -185,14 +185,14 @@ describe('attachments in realtime payloads', () => {
     ]);
     storage.putObject('attachments', rows[0]!.storage_path, sampleFiles.png(), 'image/png');
     await attachments.complete(maya, response.attachment.id);
-    const before = (await t.broadcastsOn(conversationTopic(conversationId), MESSAGE_CREATED_EVENT)).length;
+    const before = (await t.broadcastsOn(conversationTopic(conversationId, 0), MESSAGE_CREATED_EVENT)).length;
 
     const { message } = await createMessageStore(t.db).create(maya, conversationId, {
       clientId: randomUUID(),
       attachmentIds: [response.attachment.id],
     });
 
-    const created = await t.broadcastsOn(conversationTopic(conversationId), MESSAGE_CREATED_EVENT);
+    const created = await t.broadcastsOn(conversationTopic(conversationId, 0), MESSAGE_CREATED_EVENT);
     expect(created).toHaveLength(before + 1);
     const payload = messageSchema.parse(created.at(-1)!.payload);
     expect(payload).toEqual(message);

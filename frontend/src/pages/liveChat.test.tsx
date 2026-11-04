@@ -176,7 +176,7 @@ describe('read receipts', () => {
     backend({ conversations: [conversation], messages: [mine] });
     renderWithAuth(<App />, { path: `/conversations/${CONVERSATION_ID}` });
     await screen.findByRole('log', { name: 'Messages' });
-    await joinChannel(conversationTopic(CONVERSATION_ID));
+    await joinChannel(conversationTopic(CONVERSATION_ID, 0));
   }
 
   it('goes from Sent to Delivered to Read in 1:1 as the other person’s markers move', async () => {
@@ -184,7 +184,7 @@ describe('read receipts', () => {
     await openWithMine(makeConversation(), mine);
     expect(await screen.findByLabelText('Message status: Sent')).toBeInTheDocument();
 
-    const channel = latestChannel(conversationTopic(CONVERSATION_ID));
+    const channel = latestChannel(conversationTopic(CONVERSATION_ID, 0));
     act(() => channel.emit('receipt.updated', { conversationId: CONVERSATION_ID, userId: OTHER_USER_ID, lastDeliveredAt: mine.createdAt, lastReadAt: null }));
     expect(screen.getByLabelText('Message status: Delivered')).toBeInTheDocument();
 
@@ -217,8 +217,8 @@ describe('typing and presence in the open conversation', () => {
     backend({ conversations: [conversation], messages: [makeMessage()] });
     renderWithAuth(<App />, { path: `/conversations/${CONVERSATION_ID}` });
     await screen.findByRole('log', { name: 'Messages' });
-    await joinChannel(liveTopic(CONVERSATION_ID));
-    return latestChannel(liveTopic(CONVERSATION_ID));
+    await joinChannel(liveTopic(CONVERSATION_ID, 0));
+    return latestChannel(liveTopic(CONVERSATION_ID, 0));
   }
 
   it('shows "Jonas Lindqvist is typing…" and clears it when they stop', async () => {

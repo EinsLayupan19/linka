@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, index, pgPolicy, pgTable, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { check, index, integer, pgPolicy, pgTable, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { authenticatedRole } from 'drizzle-orm/supabase';
 import { conversationType, memberRole } from './enums.js';
 import { profiles } from './profiles.js';
@@ -23,6 +23,12 @@ export const conversations = pgTable(
     /** Direct only: the two members, ordered. Null for groups. */
     directLowUserId: uuid('direct_low_user_id').references(() => profiles.id, { onDelete: 'set null' }),
     directHighUserId: uuid('direct_high_user_id').references(() => profiles.id, { onDelete: 'set null' }),
+    /**
+     * Part of the realtime topic names (conversation:<id>:<version>, live:<id>:<version>). Bumped
+     * by the database when someone leaves or is removed, so channels joined before that stop
+     * receiving anything; joining the new topics needs current membership (migration 0013).
+     */
+    channelVersion: integer('channel_version').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()

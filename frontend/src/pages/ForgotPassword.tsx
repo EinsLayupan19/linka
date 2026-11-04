@@ -4,6 +4,7 @@ import { forgotPasswordSchema } from '@linka/shared';
 import { Alert } from '../components/ui/Alert';
 import { Button } from '../components/ui/Button';
 import { TextField } from '../components/ui/TextField';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { requestPasswordReset } from '../services/auth';
 import { fieldErrors } from '../utils/formErrors';
@@ -11,6 +12,7 @@ import { fieldErrors } from '../utils/formErrors';
 const linkClassName = 'font-medium text-accent underline-offset-4 hover:underline';
 
 export function ForgotPassword() {
+  useDocumentTitle('Reset your password');
   const [email, setEmail] = useState('');
   const [error, setError] = useState<string | undefined>();
   const [formError, setFormError] = useState<string | null>(null);

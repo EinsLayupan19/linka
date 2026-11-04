@@ -1,7 +1,11 @@
 import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
 import {
+  canAddMembers,
+  canChangeRole,
+  canEditGroup,
   ErrorCode,
   GROUP_MAX_MEMBERS,
+  removalDecision,
   UNREAD_COUNT_CAP,
   type AddMembersInput,
   type Conversation,
@@ -12,15 +16,16 @@ import {
   type UpdateConversationInput,
 } from '@linka/shared';
 import type { Database } from '../db/client.js';
-import { postgresErrorCode, UNIQUE_VIOLATION } from '../db/errors.js';
+import { CHECK_VIOLATION, postgresConstraint, postgresErrorCode, UNIQUE_VIOLATION } from '../db/errors.js';
 import { conversationMembers, conversations, messages, profiles, type ConversationRow } from '../db/schema/index.js';
 import { AppError } from '../utils/AppError.js';
-import { canAddMembers, canChangeRole, canEditGroup, removalDecision } from './conversationPermissions.js';
-import { requireMembership } from './membership.js';
+import { requireMembership, type Membership } from './membership.js';
 import { noMediaUrls, type MediaUrls } from './media.js';
 import { loadAttachments, toMessage } from './messages.js';
 
 export const CONVERSATION_LIST_LIMIT = 50;
+/** The deferred check of migration 0011: a group must keep an owner. */
+const GROUP_OWNER_CONSTRAINT = 'conversation_members_group_owner';
 
 /** Conversation operations. `userId` is always the signed-in user from the access token. */
 export interface ConversationStore {
@@ -148,6 +153,7 @@ export function createConversationStore(db: Database, media: MediaUrls = noMedia
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
       members: members.get(row.id) ?? [],
+      channelVersion: row.channelVersion,
       lastMessage: lastMessages.get(row.id) ?? null,
       unreadCount: unread.get(row.id) ?? 0,
     }));
@@ -161,10 +167,10 @@ export function createConversationStore(db: Database, media: MediaUrls = noMedia
     return conversation!;
   }
 
-  /** Throws a 400 naming the field if any of the ids has no profile. */
-  async function assertUsersExist(userIds: string[], field: string) {
+  /** Throws a 400 naming the field if any of the ids has no profile. Pass `tx` when inside a transaction. */
+  async function assertUsersExist(userIds: string[], field: string, tx: Database = db) {
     if (userIds.length === 0) return;
-    const found = await db.select({ id: profiles.id }).from(profiles).where(inArray(profiles.id, userIds));
+    const found = await tx.select({ id: profiles.id }).from(profiles).where(inArray(profiles.id, userIds));
     if (found.length !== userIds.length) {
       const message = userIds.length === 1 ? 'That user does not exist.' : 'Some of these users do not exist.';
       throw new AppError(400, ErrorCode.ValidationFailed, message, { [field]: message });
@@ -251,14 +257,41 @@ export function createConversationStore(db: Database, media: MediaUrls = noMedia
     return membership;
   }
 
-  async function targetRole(conversationId: string, targetUserId: string): Promise<MemberRole> {
-    const [row] = await db
+  async function targetRole(tx: Database, conversationId: string, targetUserId: string): Promise<MemberRole> {
+    const [row] = await tx
       .select({ role: conversationMembers.role })
       .from(conversationMembers)
       .where(and(eq(conversationMembers.conversationId, conversationId), eq(conversationMembers.userId, targetUserId)))
       .limit(1);
     if (!row) throw memberNotFound();
     return row.role;
+  }
+
+  /**
+   * Runs `change` in a transaction that first locks the conversation's row, so membership changes
+   * to one conversation happen one at a time, and every check inside sees what the previous change
+   * committed. (Checking before the transaction let a transfer and a removal both pass their checks
+   * and together leave a group without an owner.) `change` gets the caller's membership, read
+   * after the lock.
+   */
+  async function lockedMembershipChange<T>(
+    conversationId: string,
+    userId: string,
+    change: (tx: Database, membership: Membership) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await db.transaction(async (transaction) => {
+        const tx = transaction as unknown as Database;
+        await tx.select({ id: conversations.id }).from(conversations).where(eq(conversations.id, conversationId)).for('update');
+        return change(tx, await requireMembership(tx, conversationId, userId));
+      });
+    } catch (error) {
+      // The database's own last line of defense (migration 0011); the checks above should get there first.
+      if (postgresErrorCode(error) === CHECK_VIOLATION && postgresConstraint(error) === GROUP_OWNER_CONSTRAINT) {
+        throw new AppError(409, ErrorCode.OwnerCannotLeave, 'A group must keep an owner. Transfer ownership first.');
+      }
+      throw error;
+    }
   }
 
   return {
@@ -297,81 +330,72 @@ export function createConversationStore(db: Database, media: MediaUrls = noMedia
     },
 
     async addMembers(userId, conversationId, input) {
-      const { role } = await requireGroupMember(conversationId, userId);
-      if (!canAddMembers(role)) throw forbidden('Only the owner and admins can add members.');
-
       const newIds = [...new Set(input.userIds)];
-      const alreadyIn = await db
-        .select({ userId: conversationMembers.userId })
-        .from(conversationMembers)
-        .where(and(eq(conversationMembers.conversationId, conversationId), inArray(conversationMembers.userId, newIds)));
-      if (alreadyIn.length > 0) {
-        throw new AppError(409, ErrorCode.AlreadyMember, 'Some of these people are already in the group.');
-      }
-      await assertUsersExist(newIds, 'userIds');
+      await lockedMembershipChange(conversationId, userId, async (tx, { role, conversationType }) => {
+        if (conversationType !== 'group') throw groupsOnly();
+        if (!canAddMembers(role)) throw forbidden('Only the owner and admins can add members.');
 
-      const [current] = await db
-        .select({ total: count() })
-        .from(conversationMembers)
-        .where(eq(conversationMembers.conversationId, conversationId));
-      if ((current?.total ?? 0) + newIds.length > GROUP_MAX_MEMBERS) {
-        throw new AppError(400, ErrorCode.ValidationFailed, `A group can have at most ${GROUP_MAX_MEMBERS} members.`);
-      }
-
-      try {
-        await db
-          .insert(conversationMembers)
-          .values(newIds.map((memberId) => ({ conversationId, userId: memberId, role: 'member' as const })));
-      } catch (error) {
-        // Someone else added the same person at the same moment; the primary key stops the duplicate.
-        if (postgresErrorCode(error) === UNIQUE_VIOLATION) {
+        const alreadyIn = await tx
+          .select({ userId: conversationMembers.userId })
+          .from(conversationMembers)
+          .where(and(eq(conversationMembers.conversationId, conversationId), inArray(conversationMembers.userId, newIds)));
+        if (alreadyIn.length > 0) {
           throw new AppError(409, ErrorCode.AlreadyMember, 'Some of these people are already in the group.');
         }
-        throw error;
-      }
+        await assertUsersExist(newIds, 'userIds', tx);
+
+        // Counted under the lock, so two additions at once cannot push a group past the limit.
+        const [current] = await tx
+          .select({ total: count() })
+          .from(conversationMembers)
+          .where(eq(conversationMembers.conversationId, conversationId));
+        if ((current?.total ?? 0) + newIds.length > GROUP_MAX_MEMBERS) {
+          throw new AppError(400, ErrorCode.ValidationFailed, `A group can have at most ${GROUP_MAX_MEMBERS} members.`);
+        }
+
+        await tx
+          .insert(conversationMembers)
+          .values(newIds.map((memberId) => ({ conversationId, userId: memberId, role: 'member' as const })));
+      });
       return load(conversationId, userId);
     },
 
     async updateMemberRole(userId, conversationId, targetUserId, role) {
-      const actor = await requireGroupMember(conversationId, userId);
-      if (!canChangeRole(actor.role, targetUserId === userId)) {
-        throw forbidden('Only the owner can change roles.');
-      }
-      const current = await targetRole(conversationId, targetUserId);
-      if (current === role) return load(conversationId, userId);
+      await lockedMembershipChange(conversationId, userId, async (tx, actor) => {
+        if (actor.conversationType !== 'group') throw groupsOnly();
+        if (!canChangeRole(actor.role, targetUserId === userId)) {
+          throw forbidden('Only the owner can change roles.');
+        }
+        const current = await targetRole(tx, conversationId, targetUserId);
+        if (current === role) return;
 
-      const memberRow = (id: string) =>
-        and(eq(conversationMembers.conversationId, conversationId), eq(conversationMembers.userId, id));
-
-      if (role === 'owner') {
+        const memberRow = (id: string) =>
+          and(eq(conversationMembers.conversationId, conversationId), eq(conversationMembers.userId, id));
         // Transfer: the old owner steps down first, so there is never a moment with two owners.
-        await db.transaction(async (tx) => {
-          await tx.update(conversationMembers).set({ role: 'admin' }).where(memberRow(userId));
-          await tx.update(conversationMembers).set({ role: 'owner' }).where(memberRow(targetUserId));
-        });
-      } else {
-        await db.update(conversationMembers).set({ role }).where(memberRow(targetUserId));
-      }
+        if (role === 'owner') await tx.update(conversationMembers).set({ role: 'admin' }).where(memberRow(userId));
+        await tx.update(conversationMembers).set({ role }).where(memberRow(targetUserId));
+      });
       return load(conversationId, userId);
     },
 
     async removeMember(userId, conversationId, targetUserId) {
-      const membership = await requireMembership(db, conversationId, userId);
-      if (membership.conversationType !== 'group') {
-        throw new AppError(400, ErrorCode.BadRequest, 'You cannot leave or remove people from a 1:1 conversation.');
-      }
-      const isSelf = targetUserId === userId;
-      const role = isSelf ? membership.role : await targetRole(conversationId, targetUserId);
+      await lockedMembershipChange(conversationId, userId, async (tx, membership) => {
+        if (membership.conversationType !== 'group') {
+          throw new AppError(400, ErrorCode.BadRequest, 'You cannot leave or remove people from a 1:1 conversation.');
+        }
+        const isSelf = targetUserId === userId;
+        const role = isSelf ? membership.role : await targetRole(tx, conversationId, targetUserId);
 
-      const decision = removalDecision(membership.role, role, isSelf);
-      if (decision === 'owner_must_transfer') {
-        throw new AppError(409, ErrorCode.OwnerCannotLeave, 'Transfer ownership to someone else before leaving.');
-      }
-      if (decision === 'forbidden') throw forbidden('You cannot remove this member.');
+        const decision = removalDecision(membership.role, role, isSelf);
+        if (decision === 'owner_must_transfer') {
+          throw new AppError(409, ErrorCode.OwnerCannotLeave, 'Transfer ownership to someone else before leaving.');
+        }
+        if (decision === 'forbidden') throw forbidden('You cannot remove this member.');
 
-      await db
-        .delete(conversationMembers)
-        .where(and(eq(conversationMembers.conversationId, conversationId), eq(conversationMembers.userId, targetUserId)));
+        await tx
+          .delete(conversationMembers)
+          .where(and(eq(conversationMembers.conversationId, conversationId), eq(conversationMembers.userId, targetUserId)));
+      });
     },
   };
 }

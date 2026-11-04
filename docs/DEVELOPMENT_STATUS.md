@@ -9,15 +9,15 @@
 | 5     | Read, delivery, presence & typing      | Complete    |
 | 6     | Media & file sharing                   | Complete    |
 | 7     | Voice calls                            | Complete    |
-| 8     | Video calls                            | In review   |
-| 9     | Polish, security & scalability         | Not started |
-| 10    | Production preparation & deployment    | Not started |
+| 8     | Video calls                            | Complete    |
+| 9     | Group chat UI                          | In review   |
+| 10    | Polish, security & scalability         | In progress |
+| 11    | Production preparation & deployment    | Not started |
 
 Also done between phases: light, dark and system themes (see [Themes](#themes)).
 
-In scope and scheduled for a later phase: the group chat UI (create a group, name it, add and remove
-members, roles, leave). The API for all of it exists since Phase 3; the web client can only show
-groups so far.
+The group chat UI was added as Phase 9 (the API for groups has existed since Phase 3); the former
+Phases 9 and 10 moved to 10 and 11.
 
 ## Phase 1: Foundation
 
@@ -276,6 +276,87 @@ Not verifiable until checked in two real browsers (step 14 below):
   permission prompts; camera on / off / on in both directions; mobile browsers (iOS Safari,
   Android Chrome), including autoplay rules and the panel's size on small screens
 
+## Phase 9: Group chat UI
+
+Done (web client only; the API, database, RLS and realtime events for groups already existed):
+
+- **New group** (from New chat): group name, people chosen by username search (each person once;
+  yourself never listed), checked with the shared schema before sending, "Creating…", the API's
+  reason on failure; opens the new group
+- Groups in the list: two members' faces as the group's picture (groups have no picture of their
+  own), "Group" for screen readers, the sender's name in the preview ("Jonas: See you there"), time,
+  unread count
+- Group chat: header with the group's picture, name, "N members" (and "M online"), **Group info**;
+  the existing history, composer, attachments, typing, "Read by N" and sender names; no call buttons
+- **Group info** dialog (native `<dialog>`): name, member count, your role, members sorted owner,
+  admins, members, with roles and "(you)"; actions only where your role allows them:
+  - Rename (owner, admins), Add people (owner, admins; current members cannot be chosen again)
+  - Per member: Make admin / Remove as admin and Make owner (owner only), Remove from group (owner;
+    admins for regular members)
+  - Leave group (admins and members; the owner is told to hand over ownership first)
+  - Remove, transfer and leave ask for confirmation and say what will happen
+- Changes made here update the dialog, the chat header and the list at once; changes made by others
+  arrive through the existing events (`conversation.updated` refetches the open group,
+  `conversation.changed` updates the list); someone who is removed sees "Conversation not found"
+  and loses the group from their list
+- Role rules moved from the backend to `@linka/shared` (`conversations/permissions.ts`): the API
+  enforces them, the web client uses the very same functions to decide what to show
+- Tests: shared permission rules (moved with them); API: a member removed from a group can no longer
+  read, send or see it (new); web: creating a group (success, no name, no members, choosing the same
+  person twice, "Creating…", field and network errors), the list row, the group header, the info
+  dialog for a member, an admin and the owner (which actions appear), rename (success, validation,
+  refused), add people (current members not choosable, none chosen, already added), remove (confirm,
+  cancel, refused), transfer, make admin and back, leave, closing and reopening, live rename and new
+  member, being removed by someone else
+
+Not in this phase (by design): group pictures, group descriptions or invite links, deleting a group,
+group calls, muting or archiving, per-member read receipts (groups keep "Read by N").
+
+Not verifiable without two or more real accounts (step 15 below): the realtime updates between
+browsers, and everything above against the hosted API.
+
+## Phase 10: Polish, security & scalability
+
+Done so far:
+
+- **Rate limits** on the API (`middleware/rateLimit.ts`, details in ARCHITECTURE.md): per user once
+  signed in (overall, and tighter ones for sending, search, new conversations, group changes,
+  calls and uploads), per IP for requests without a valid token and for the health check. Over a
+  limit: `429 RATE_LIMITED` with `Retry-After`; the web client shows the API's message. New env
+  variable `TRUST_PROXY` (`0` locally, `1` on Render) so IPs come from `X-Forwarded-For` only
+  behind a known proxy
+- **Group ownership race fixed** (was a known issue): membership changes to a conversation run
+  one at a time in a transaction that locks it, with every check after the lock; migration `0011`
+  adds a deferred database check that a group never ends up without an owner (answered as
+  `409 OWNER_CANNOT_LEAVE`). Group size is also counted under the lock, so two additions at once
+  cannot pass 100 members
+- **Removed members stop receiving live** (was a known issue): realtime topics carry the
+  conversation's channel version (migrations `0012`, `0013`), which goes up on every leave or
+  removal; members' clients rejoin the new topics after the refetch, the removed member is not
+  admitted to them, and nothing is published on the old ones again
+- **Code splitting**: pages other than the chats load on first visit; React, supabase-js and Zod
+  in their own long-cached files. No file above 500 kB (was one 632 kB file); the Vite warning is gone
+- **Accessibility**: page names in the tab and announced to screen readers on every page change;
+  **Skip to content** link; visible focus outlines on every control; form field borders at 3:1
+  contrast in both themes (were 1.25:1 light, 1.66:1 dark); the owner's **Leave group** is
+  focusable (`aria-disabled`) so its explanation can be reached
+- Tests: rate limiter (windows, keys, refusing without extending) and the API's limits end to end
+  (per user, per action, overall, per IP before sign-in, header spoofing, health, and that a normal
+  burst of activity is never refused); ownership invariant in the database (transfer to a removed
+  member, removing or demoting the owner, complete transfers, deleting groups and accounts, 1:1) and
+  the API's races (transfer vs removal, leave vs promotion, two tabs); removed members on realtime
+  (version bump, last event on the old topic and nothing after, join refused on old and new topics,
+  leaving, additions and renames keep the version, re-added members, malformed topics); web: rejoin
+  under the new version, page titles and announcements, skip link, the focusable Leave group
+
+Still to do in this phase: a TURN relay with short-lived credentials (behind the existing
+`GET /api/calls/ice-servers`), the upload sweep as a scheduled job instead of inside the API
+process, image thumbnails, and checking the above against the hosted project (step 16 below).
+
+Not verifiable locally: the channel version against hosted Supabase Realtime (the policies are
+tested on a local Postgres with Supabase's `realtime` schema stubbed), and rate limits behind
+Render's proxy (`TRUST_PROXY=1`).
+
 ## Themes
 
 Light, dark and **system** (follows the operating system, live) themes, chosen under *Profile >
@@ -340,6 +421,22 @@ pages use the saved (or system) theme; the switch itself is on the profile page 
     camera", then turn the camera on during the call (the other side should see it); reload one
     side and use **Join here**.
 
+15. **Check groups (Phase 9)** with three accounts in three browser sessions: create a group, send
+    messages (they should appear live for everyone), rename it, add and remove someone (the removed
+    person's list drops the group and its page shows "Conversation not found"), make someone an
+    admin, transfer ownership, and leave. No dashboard change is needed.
+
+16. **Check Phase 10.** Apply the new migrations (`cd backend && npm run db:migrate`: `0011` to
+    `0013`). Then, with the step 15 group open in three browsers:
+    - Remove one person while they have the group open, then send a message from another browser:
+      it must **not** appear in the removed person's browser (before Phase 10 it did), and the two
+      others keep receiving messages, typing and "Online" without a reload.
+    - Re-add that person: they get the group back and receive live again.
+    - On Render, set `TRUST_PROXY=1` on the API service. Optionally check a limit: requests without
+      a token from one machine get `429` with `Retry-After` after 60 in a minute
+      (`curl -i <api>/api/users/me` in a loop), while signed-in use in the browser is unaffected.
+    No Supabase dashboard change is needed.
+
 Supabase's built-in email service is heavily rate limited and meant for testing; configure custom
 SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
 
@@ -359,7 +456,9 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
 | Username | Unique, lowercase `a-z 0-9 _`, 3-20 chars; not editable yet |
 | User discovery | Username prefix search, signed-in only, max 20 results, never email |
 | Profile pictures | Private `avatars` bucket; uploaded through the API (2 MB raw body, signature-checked); new random path per upload; signed `avatarUrl` (1 h) on every user the API returns |
-| Group roles | `owner`, `admin`, `member`; rules in ARCHITECTURE.md and `conversationPermissions.ts` |
+| Group roles | `owner`, `admin`, `member`; rules in ARCHITECTURE.md and `@linka/shared` `conversations/permissions.ts` (used by the API to enforce, by the web client to show actions) |
+| Group picture | None stored: two members' faces (others first, then you), or the name's initial |
+| Group management UI | One native `<dialog>` with views (overview, rename, add, member, confirm); destructive or irreversible steps confirm first |
 | Ownership | Exactly one owner; leaves only after transferring; transfer makes the old owner an admin |
 | 1:1 conversations | Exactly two members, unique per pair (database), cannot be left or changed; creating an existing one returns it |
 | Non-member access | 404, same as a missing conversation (existence is never revealed) |
@@ -369,7 +468,10 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
 | Read/delivery markers | Columns exist on `conversation_members` (PLAN.md §5), logic in Phase 5 |
 | Realtime | Broadcast from Database, private channel per conversation, event `message.created`, payload = shared `Message` |
 | Realtime writes | Only the database trigger publishes; no INSERT policy for clients |
-| Removed members on an open channel | May keep receiving live events until their token refreshes (accepted; no short token lifetimes) |
+| Removed members on an open channel | Cut off at once (Phase 10): topics carry `channel_version`, bumped on every leave or removal; before, they kept receiving until their token refreshed |
+| Rate limits | In-process fixed one-minute windows; per user once signed in, per IP otherwise; `429 RATE_LIMITED` + `Retry-After`; IP via `TRUST_PROXY` only (Phase 10) |
+| Membership change concurrency | One transaction per change, locking the conversation row first; deferred database check that a group keeps an owner (Phase 10) |
+| Page loading | Chats and chat with the app; other pages lazy; React, supabase-js, Zod in separate cached files (Phase 10) |
 | Message identity | Message id; the sender's `clientId` makes sends idempotent |
 | Message content | Stored exactly as typed; must contain non-whitespace, max 4000 characters |
 | Pagination cursor | Opaque base64url of `[createdAt, id]`; default 50, max 100 per page |
@@ -415,8 +517,14 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
   run an esbuild dev server, so the advisory does not apply. `npm audit fix --force` would downgrade
   drizzle-kit to 0.18, so it is intentionally not applied.
 - TypeScript is pinned to 6.0.x because typescript-eslint does not support TypeScript 7 yet.
-- The frontend bundle is ~632 kB (180 kB gzipped), mostly React and supabase-js; Vite warns above
-  500 kB. Code splitting is part of the Phase 9 performance audit.
+- Since Phase 10 the app loads in files of at most ~257 kB (React; 82 kB gzipped); what a first
+  visit to the chats downloads is still about 180 kB gzipped, most of it React and supabase-js.
+- Rate limits are counted in the API process's memory: they reset when it restarts (or wakes up on
+  Render's free tier), and with more than one instance each counts on its own. A shared store
+  (Redis) would be needed to scale out.
+- Behind a proxy, `TRUST_PROXY` must match the number of proxies (Render: `1`). Too low and every
+  signed-out request appears to come from the proxy (one shared per-IP allowance); too high and
+  clients can pick their own IP with `X-Forwarded-For`.
 - "Online" means the person has the same conversation open (Presence on that conversation's live
   channel). Otherwise the header shows "Last seen", which can lag by up to about 5 minutes.
 - Supabase does not attest who sent a client broadcast or presence entry: a member could make
@@ -464,3 +572,16 @@ SMTP (*Authentication > Emails > SMTP Settings*) before real users sign up.
 - The front camera (`facingMode: user`) is always used; there is no camera switch or device picker.
 - On a phone the video panel sits over the bottom of the chat (it can be hidden only by ending the
   call); it has not been checked on real phones yet.
+- A group's owner cannot leave until someone else is the owner, and an owner who is the group's
+  only member cannot leave at all (there is no "delete group" yet).
+- Deleting an owner's account leaves their groups without an owner (the database check allows it
+  on purpose, or the account could never be deleted). Nobody can then change roles or make anyone
+  owner until an owner-recovery feature exists; admins can still rename the group, add people and
+  remove regular members.
+- A member removed while the group is open in their browser no longer receives anything from the
+  database on it (Phase 10). Their open page shows "Conversation not found" after the refetch. If
+  that refetch fails (offline at that moment), the page keeps showing what it had until they reload;
+  it receives nothing new either way.
+- Role changes made by others reach whoever has the group open; other members' conversation lists
+  keep the old roles until they reload or the list refreshes (roles are not shown in the list).
+- Groups have no picture of their own yet: the two-faces picture comes from the members.

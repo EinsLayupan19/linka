@@ -38,6 +38,7 @@ export function makeConversation(overrides: Partial<Conversation> = {}): Convers
       { userId: TEST_USER_ID, role: 'member', joinedAt: '2026-10-22T08:00:00.000Z', username: 'maya', displayName: 'Maya Reyes', avatarUrl: null, ...noMarkers },
       { userId: OTHER_USER_ID, role: 'member', joinedAt: '2026-10-22T08:00:00.000Z', username: 'jonas', displayName: 'Jonas Lindqvist', avatarUrl: null, ...noMarkers },
     ],
+    channelVersion: 0,
     lastMessage: null,
     unreadCount: 0,
     ...overrides,

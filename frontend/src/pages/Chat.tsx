@@ -1,15 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router';
 import type { Conversation, Message, ReceiptUpdatedEvent } from '@linka/shared';
 import { Composer } from '../components/chat/Composer';
+import { ConversationAvatar } from '../components/chat/ConversationAvatar';
 import { LiveStatusNotice } from '../components/chat/LiveStatusNotice';
 import { MessageList } from '../components/chat/MessageList';
 import { TypingIndicator } from '../components/chat/TypingIndicator';
-import { Avatar } from '../components/ui/Avatar';
 import { Button } from '../components/ui/Button';
 import { useCalls } from '../hooks/useCalls';
 import { useChats } from '../hooks/useChats';
 import { useConversationMessages } from '../hooks/useConversationMessages';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useLiveConversation } from '../hooks/useLiveConversation';
 import { useProfile } from '../hooks/useProfile';
 import { useReadTracking } from '../hooks/useReadTracking';
@@ -18,6 +19,9 @@ import { getConversation } from '../services/conversations';
 import { conversationTitle, otherMember } from '../utils/conversation';
 import { receiptLabel, withMarkers } from '../utils/receipts';
 import { formatLastSeen } from '../utils/time';
+
+// Loaded the first time someone opens a group's info (most visits never do).
+const GroupInfoDialog = lazy(async () => ({ default: (await import('../components/group/GroupInfoDialog')).GroupInfoDialog }));
 
 const backLinkClassName =
   'rounded-lg px-1 text-sm font-medium text-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent md:hidden';
@@ -35,8 +39,10 @@ export function Chat() {
 
 function ConversationScreen({ conversationId }: { conversationId: string }) {
   const { profile } = useProfile();
-  const { list, applyMessage, applyRead, delivery } = useChats();
+  const { list, applyMessage, applyRead, delivery, upsertConversation, removeConversation } = useChats();
   const calls = useCalls();
+  const navigate = useNavigate();
+  const [infoOpen, setInfoOpen] = useState(false);
 
   // Header details: shown from the list right away if known, then fetched fresh, and fetched
   // again whenever the conversation changes (members, roles, name).
@@ -74,17 +80,29 @@ function ConversationScreen({ conversationId }: { conversationId: string }) {
     [conversationId, delivery, profile.id],
   );
 
-  const messages = useConversationMessages(conversationId, {
+  /** A group change made here (rename, members, roles): the header and the list show it at once. */
+  const showChanged = useCallback(
+    (conversation: Conversation) => {
+      setDetails({ status: 'ready', conversation });
+      upsertConversation(conversation);
+    },
+    [upsertConversation],
+  );
+
+  const conversation = details.status === 'ready' ? details.conversation : fromList;
+  // Which realtime channels to join; a refetch after someone left brings a new version.
+  const channelVersion = conversation?.channelVersion ?? null;
+
+  const messages = useConversationMessages(conversationId, channelVersion, {
     onActivity: applyMessage,
     onReceived,
     onReceipt: updateMembers,
     onConversationUpdated: () => setDetailsAttempt((n) => n + 1),
   });
 
-  const conversation = details.status === 'ready' ? details.conversation : fromList;
   const me = conversation?.members.find((m) => m.userId === profile.id);
   const memberIds = useMemo(() => new Set(conversation?.members.map((m) => m.userId) ?? []), [conversation]);
-  const live = useLiveConversation(conversationId, profile.id, memberIds, messages.state.status === 'ready');
+  const live = useLiveConversation(conversationId, channelVersion, profile.id, memberIds, messages.state.status === 'ready');
 
   const [atBottom, setAtBottom] = useState(true);
   useReadTracking({
@@ -107,6 +125,7 @@ function ConversationScreen({ conversationId }: { conversationId: string }) {
   const notFound =
     (details.status === 'error' && details.error.code === 'CONVERSATION_NOT_FOUND') ||
     (messages.state.status === 'error' && messages.state.error?.code === 'CONVERSATION_NOT_FOUND');
+  useDocumentTitle(notFound ? 'Conversation not found' : conversation ? conversationTitle(conversation, profile.id) : null);
   if (notFound) {
     return (
       <div className="grid flex-1 place-items-center p-6 text-center">
@@ -148,11 +167,7 @@ function ConversationScreen({ conversationId }: { conversationId: string }) {
         </Link>
         {conversation ? (
           <>
-            <Avatar
-              name={title}
-              size="sm"
-              src={conversation.type === 'direct' ? otherMember(conversation, profile.id)?.avatarUrl : null}
-            />
+            <ConversationAvatar conversation={conversation} myUserId={profile.id} size="sm" />
             <div className="min-w-0 flex-1">
               <h1 className="truncate font-semibold">{title}</h1>
               {subtitle && (
@@ -181,6 +196,28 @@ function ConversationScreen({ conversationId }: { conversationId: string }) {
                   Video
                 </Button>
               </div>
+            )}
+            {conversation.type === 'group' && me && (
+              <>
+                <Button variant="secondary" onClick={() => setInfoOpen(true)} className="h-9 shrink-0 px-3">
+                  Group info
+                </Button>
+                {infoOpen && (
+                  <Suspense fallback={null}>
+                    <GroupInfoDialog
+                      open
+                      onClose={() => setInfoOpen(false)}
+                      conversation={conversation}
+                      myUserId={profile.id}
+                      onUpdated={showChanged}
+                      onLeft={() => {
+                        removeConversation(conversationId);
+                        navigate('/', { replace: true });
+                      }}
+                    />
+                  </Suspense>
+                )}
+              </>
             )}
           </>
         ) : (

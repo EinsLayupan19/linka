@@ -36,6 +36,7 @@ async function user() {
     get: (path: string, query: Record<string, string | number> = {}) =>
       request(app).get(path).query(query).set('Authorization', authorization),
     post: (path: string, body?: object) => request(app).post(path).set('Authorization', authorization).send(body),
+    delete: (path: string) => request(app).delete(path).set('Authorization', authorization),
   };
 }
 type User = Awaited<ReturnType<typeof user>>;
@@ -117,6 +118,25 @@ describe('POST /api/conversations/:id/messages', () => {
     }
     const { rows } = await t.client.query('select 1 from messages where conversation_id = $1', [conversationId]);
     expect(rows).toEqual([]);
+  });
+
+  it('a member removed from a group can no longer read, send or see it listed; the others still can', async () => {
+    const [owner, member] = await Promise.all([user(), user()]);
+    const created = await owner.post('/api/conversations', { type: 'group', name: 'Trip', memberIds: [member.id] });
+    const conversationId = created.body.id as string;
+    expect((await send(member, conversationId, 'Hi all')).status).toBe(201);
+
+    expect((await owner.delete(`/api/conversations/${conversationId}/members/${member.id}`)).status).toBe(204);
+
+    const history = await member.get(messagesPath(conversationId));
+    expect(history.status).toBe(404);
+    expect(history.body.error.code).toBe('CONVERSATION_NOT_FOUND');
+    expect((await send(member, conversationId, 'Still here?')).status).toBe(404);
+    const list = conversationListSchema.parse((await member.get('/api/conversations')).body);
+    expect(list.conversations.map((c) => c.id)).not.toContain(conversationId);
+    // Their earlier message stays for the remaining members.
+    const remaining = messagePageSchema.parse((await owner.get(messagesPath(conversationId))).body);
+    expect(remaining.messages.map((m) => m.content)).toEqual(['Hi all']);
   });
 
   it('requires authentication', async () => {

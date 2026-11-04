@@ -42,6 +42,13 @@ function HeaderActions() {
 export function AppShell() {
   return (
     <div className="flex min-h-[100dvh] flex-col">
+      {/* First stop for keyboard users: past the header straight to the page. Hidden until focused. */}
+      <a
+        href="#main"
+        className="sr-only rounded-lg bg-surface px-3 py-2 text-sm font-medium text-ink ring-1 ring-line focus:not-sr-only focus:fixed focus:top-2 focus:left-4 focus:z-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+      >
+        Skip to content
+      </a>
       <header className="border-b border-line">
         <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
           <Link to="/" className={`${focusRing} text-base font-semibold tracking-tight`}>
@@ -50,7 +57,7 @@ export function AppShell() {
           <HeaderActions />
         </div>
       </header>
-      <main className="flex-1">
+      <main id="main" tabIndex={-1} className="flex-1 focus:outline-none">
         <Outlet />
       </main>
     </div>

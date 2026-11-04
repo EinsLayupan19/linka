@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canAddMembers, canChangeRole, canEditGroup, removalDecision } from './conversationPermissions.js';
+import { canAddMembers, canChangeRole, canEditGroup, removalDecision } from './permissions.js';
 
 describe('group permissions', () => {
   it('lets the owner and admins edit the group and add members, not regular members', () => {

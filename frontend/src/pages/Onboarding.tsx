@@ -6,6 +6,7 @@ import { PageLoading, PageMessage } from '../components/layout/PageStatus';
 import { Alert } from '../components/ui/Alert';
 import { Button } from '../components/ui/Button';
 import { TextField } from '../components/ui/TextField';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useMyProfile } from '../hooks/useMyProfile';
 import { ApiError } from '../lib/api';
 import { createMyProfile } from '../services/profiles';
@@ -13,6 +14,7 @@ import { fieldErrors } from '../utils/formErrors';
 
 /** First step after signing up: choose a username and display name. */
 export function Onboarding() {
+  useDocumentTitle('Set up your profile');
   const { state, retry } = useMyProfile();
   const navigate = useNavigate();
   const [values, setValues] = useState({ username: '', displayName: '' });

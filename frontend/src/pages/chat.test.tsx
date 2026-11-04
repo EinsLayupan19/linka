@@ -12,7 +12,7 @@ vi.mock('../lib/supabase', async () => (await import('../test/supabaseMock')).su
 
 const conversationPath = `/api/conversations/${CONVERSATION_ID}`;
 const messagesPath = `${conversationPath}/messages`;
-const topic = conversationTopic(CONVERSATION_ID);
+const topic = conversationTopic(CONVERSATION_ID, 0);
 const currentPath = () => screen.getByTestId('current-path').textContent;
 
 interface Backend {
@@ -269,11 +269,11 @@ describe('realtime', () => {
     await joinRealtime();
 
     expect(realtimeChannels.map((c) => c.topic).sort()).toEqual(
-      [`user:${TEST_USER_ID}`, topic, `live:${CONVERSATION_ID}`].sort(),
+      [`user:${TEST_USER_ID}`, topic, `live:${CONVERSATION_ID}:0`].sort(),
     );
     fireEvent.click(screen.getByRole('link', { name: 'Chats' }));
     await waitFor(() => expect(latestChannel(topic).removed).toBe(true));
-    expect(latestChannel(`live:${CONVERSATION_ID}`).removed).toBe(true);
+    expect(latestChannel(`live:${CONVERSATION_ID}:0`).removed).toBe(true);
     expect(latestChannel(`user:${TEST_USER_ID}`).removed).toBe(false);
   });
 

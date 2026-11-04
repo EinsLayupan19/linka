@@ -3,18 +3,24 @@ import type { Conversation } from '@linka/shared';
 import { useChats } from '../../hooks/useChats';
 import { useProfile } from '../../hooks/useProfile';
 import { attachmentSummary } from '../../utils/attachments';
-import { conversationTitle, otherMember } from '../../utils/conversation';
+import { conversationTitle } from '../../utils/conversation';
 import { unreadBadge } from '../../utils/receipts';
 import { formatListTimestamp } from '../../utils/time';
-import { Avatar } from '../ui/Avatar';
 import { Button, secondaryButtonClassName } from '../ui/Button';
+import { ConversationAvatar } from './ConversationAvatar';
 
 function preview(conversation: Conversation, myUserId: string): string {
   const last = conversation.lastMessage;
   if (!last) return 'No messages yet';
   // A message without text shows what it carries: "Photo", "3 photos", "plan.pdf".
   const text = (last.content ?? '').replace(/\s+/g, ' ').trim() || attachmentSummary(last.attachments);
-  return last.senderId === myUserId ? `You: ${text}` : text;
+  if (last.senderId === myUserId) return `You: ${text}`;
+  // In a group, say who wrote it (someone who has left is no longer among the members).
+  if (conversation.type === 'group') {
+    const sender = conversation.members.find((m) => m.userId === last.senderId);
+    return sender ? `${sender.displayName}: ${text}` : text;
+  }
+  return text;
 }
 
 function ConversationRow({ conversation, myUserId }: { conversation: Conversation; myUserId: string }) {
@@ -30,8 +36,9 @@ function ConversationRow({ conversation, myUserId }: { conversation: Conversatio
           (isActive ? 'bg-surface ring-1 ring-line' : 'hover:bg-surface')
         }
       >
-        <Avatar name={title} src={conversation.type === 'direct' ? otherMember(conversation, myUserId)?.avatarUrl : null} />
+        <ConversationAvatar conversation={conversation} myUserId={myUserId} />
         <span className="min-w-0 flex-1">
+          {conversation.type === 'group' && <span className="sr-only">Group: </span>}
           <span className="flex items-baseline justify-between gap-2">
             <span className={`truncate ${unread > 0 ? 'font-semibold' : 'font-medium'}`}>{title}</span>
             {last && (
@@ -110,7 +117,7 @@ export function ConversationList() {
         {list.status === 'ready' && list.conversations.length === 0 && (
           <div className="p-4 text-sm">
             <p className="font-medium">No conversations yet</p>
-            <p className="mt-1 text-ink-muted">Find someone by their username with New chat.</p>
+            <p className="mt-1 text-ink-muted">Find someone by their username with New chat, or start a group there.</p>
           </div>
         )}
 

@@ -120,10 +120,16 @@ export interface ConversationSubscriptionHandlers extends ChannelLifecycle {
 
 /**
  * The open conversation's server events (messages, receipts, updates). Only members may join,
- * and only the database publishes here. Returns a function that leaves the channel.
+ * and only the database publishes here. `channelVersion` comes from the latest Conversation: it
+ * changes when someone leaves, and then only the new version's channel receives anything.
+ * Returns a function that leaves the channel.
  */
-export function subscribeToConversation(conversationId: string, handlers: ConversationSubscriptionHandlers): () => void {
-  const { leave } = joinPrivate(conversationTopic(conversationId), {}, handlers, (channel, isLeft) => {
+export function subscribeToConversation(
+  conversationId: string,
+  channelVersion: number,
+  handlers: ConversationSubscriptionHandlers,
+): () => void {
+  const { leave } = joinPrivate(conversationTopic(conversationId, channelVersion), {}, handlers, (channel, isLeft) => {
     listen(channel, MESSAGE_CREATED_EVENT, messageSchema, (message) => {
       if (message.conversationId === conversationId) handlers.onMessage(message);
     }, isLeft);
@@ -179,11 +185,16 @@ export interface LiveConversation {
  * The open conversation's ephemeral channel: Presence (who has it open) and typing broadcasts.
  * Nothing here is stored. Members may join and publish; outsiders may do neither.
  */
-export function joinLiveConversation(conversationId: string, userId: string, handlers: LiveConversationHandlers): LiveConversation {
+export function joinLiveConversation(
+  conversationId: string,
+  channelVersion: number,
+  userId: string,
+  handlers: LiveConversationHandlers,
+): LiveConversation {
   let joined = false;
 
   const live = joinPrivate(
-    liveTopic(conversationId),
+    liveTopic(conversationId, channelVersion),
     { presenceKey: userId },
     {
       onStatus: (status) => {

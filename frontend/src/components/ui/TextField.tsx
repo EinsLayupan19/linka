@@ -26,7 +26,7 @@ export function TextField({ label, hint, error, className = '', ...inputProps }:
           'h-10 w-full rounded-lg border bg-surface px-3 text-base text-ink sm:text-sm ' +
           'placeholder:text-ink-muted focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent ' +
           'disabled:opacity-60 ' +
-          (error ? 'border-danger' : 'border-line')
+          (error ? 'border-danger' : 'border-field')
         }
         {...inputProps}
       />

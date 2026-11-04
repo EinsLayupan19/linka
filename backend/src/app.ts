@@ -6,6 +6,7 @@ import { env } from './config/env.js';
 import { db } from './db/client.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
+import { createRateLimits, RATE_LIMITS, type RateLimitConfig } from './middleware/rateLimit.js';
 import { attachmentsRouter } from './routes/attachments.js';
 import { callsRouter } from './routes/calls.js';
 import { conversationsRouter } from './routes/conversations.js';
@@ -36,6 +37,8 @@ export interface AppDependencies {
   calls: CallStore | null;
   /** STUN/TURN servers handed to browsers for WebRTC (ICE_SERVERS). */
   iceServers: IceServer[];
+  /** Requests per minute (see middleware/rateLimit.ts); tests use small ones. */
+  rateLimits: RateLimitConfig;
 }
 
 /** Private Storage, only when the server-only secret key is configured. */
@@ -54,6 +57,7 @@ function defaultDependencies(): AppDependencies {
     attachments: db ? createAttachmentStore(db, storage) : null,
     calls: db ? createCallStore(db) : null,
     iceServers: env.ICE_SERVERS,
+    rateLimits: RATE_LIMITS,
   };
 }
 
@@ -63,17 +67,21 @@ function defaultDependencies(): AppDependencies {
  */
 export function createApp(overrides: Partial<AppDependencies> = {}): Express {
   const deps: AppDependencies = { ...defaultDependencies(), ...overrides };
+  const limits = createRateLimits(deps.rateLimits);
   const app = express();
 
+  // Behind a proxy (Render), take the client's IP from that many proxy hops of X-Forwarded-For.
+  // 0 (the default) trusts no proxy, so the header cannot be used to fake an address.
+  app.set('trust proxy', env.TRUST_PROXY);
   app.use(helmet());
   app.use(cors({ origin: (origin, callback) => callback(null, origin && env.CORS_ORIGIN.includes(origin) ? origin : false) }));
   app.use(express.json({ limit: '100kb' }));
 
-  app.use('/api/health', healthRouter(deps.checkDatabase));
-  app.use('/api/users', usersRouter(deps));
-  app.use('/api/conversations', conversationsRouter(deps));
-  app.use('/api/attachments', attachmentsRouter(deps));
-  app.use('/api/calls', callsRouter(deps));
+  app.use('/api/health', limits.health, healthRouter(deps.checkDatabase));
+  app.use('/api/users', usersRouter({ ...deps, limits }));
+  app.use('/api/conversations', conversationsRouter({ ...deps, limits }));
+  app.use('/api/attachments', attachmentsRouter({ ...deps, limits }));
+  app.use('/api/calls', callsRouter({ ...deps, limits }));
 
   app.use(notFound);
   app.use(errorHandler);

@@ -50,6 +50,8 @@ export const ErrorCode = {
   AttachmentInUse: 'ATTACHMENT_IN_USE',
   UnsupportedMediaType: 'UNSUPPORTED_MEDIA_TYPE',
   PayloadTooLarge: 'PAYLOAD_TOO_LARGE',
+  /** Too many requests in a short time (429); the Retry-After header says when to try again. */
+  RateLimited: 'RATE_LIMITED',
   ServiceUnavailable: 'SERVICE_UNAVAILABLE',
   Internal: 'INTERNAL_ERROR',
 } as const;

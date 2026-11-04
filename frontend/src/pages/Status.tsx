@@ -1,5 +1,6 @@
 import { StatusRow, type StatusRowProps } from '../components/system/StatusRow';
 import { Button } from '../components/ui/Button';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useHealth, type HealthState } from '../hooks/useHealth';
 import { env } from '../lib/env';
 import { isSupabaseConfigured } from '../lib/supabase';
@@ -48,6 +49,7 @@ function supabaseRow(): StatusRowProps {
 }
 
 export function Status() {
+  useDocumentTitle('System status');
   const { state, retry } = useHealth();
   const rows = [apiRow(state), databaseRow(state), supabaseRow()];
 

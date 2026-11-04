@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import { mockApi } from './test/api';
@@ -83,25 +83,48 @@ describe('signed-out pages', () => {
   it.each([
     ['/register', 'Create your account'],
     ['/forgot-password', 'Reset your password'],
-  ])('renders %s for signed-out users', (path, heading) => {
+  ])('renders %s for signed-out users', async (path, heading) => {
     renderWithAuth(<App />, { path, auth: { status: 'signed_out' } });
-    expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+    // Pages other than the chats load on first use (code splitting), so wait for them.
+    expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
+  });
+});
+
+describe('page names and keyboard access', () => {
+  it('names each page in the tab title and announces the new page after moving between pages', async () => {
+    renderWithAuth(<App />, { path: '/login', auth: { status: 'signed_out' } });
+    await screen.findByRole('heading', { name: 'Log in' });
+    await waitFor(() => expect(document.title).toBe('Log in · Linka'));
+
+    fireEvent.click(screen.getByRole('link', { name: /create an account/i }));
+    await screen.findByRole('heading', { name: 'Create your account' });
+    await waitFor(() => expect(document.title).toBe('Create your account · Linka'));
+    await waitFor(() => expect(screen.getByTestId('page-announcer')).toHaveTextContent('Create your account'));
+    expect(screen.getByTestId('page-announcer')).toHaveAttribute('aria-live', 'polite');
+  });
+
+  it('offers a skip link that leads past the header to the page', async () => {
+    renderWithAuth(<App />, { path: '/nowhere', auth: { status: 'signed_out' } });
+    await screen.findByRole('heading', { name: 'Page not found' });
+    const skip = screen.getByRole('link', { name: 'Skip to content' });
+    expect(skip).toHaveAttribute('href', '#main');
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'main');
   });
 });
 
 describe('public pages', () => {
-  it('shows the status page without signing in', () => {
+  it('shows the status page without signing in', async () => {
     mockFetch().mockReturnValue(new Promise(() => {}));
     renderWithAuth(<App />, { path: '/status', auth: { status: 'signed_out' } });
 
-    expect(screen.getByRole('heading', { name: 'System status' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'System status' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Log in' })).toBeInTheDocument();
   });
 
-  it('shows a not-found page for unknown routes', () => {
+  it('shows a not-found page for unknown routes', async () => {
     renderWithAuth(<App />, { path: '/nowhere', auth: { status: 'signed_out' } });
 
-    expect(screen.getByRole('heading', { name: 'Page not found' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to home' })).toHaveAttribute('href', '/');
   });
 });

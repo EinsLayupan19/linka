@@ -20,13 +20,19 @@ export interface ConversationMessagesOptions {
  * Everything the conversation view needs about messages:
  * - the newest page on open, older pages on demand (cursor pagination)
  * - new messages live from the conversation's private realtime channel, joined only while
- *   this conversation is open and left when it closes
+ *   this conversation is open and left when it closes. `channelVersion` (from the Conversation)
+ *   names the channel: when it changes (someone left) the old channel is left and the new one
+ *   joined; null waits until it is known
  * - after every (re)join, the newest page again, merged by id, so nothing sent while
- *   disconnected is missed
+ *   disconnected (or while moving to a new channel version) is missed
  * - sending (text and/or uploaded attachments) with a pending state, failure and retry;
  *   retries reuse the clientId so the server never stores a message twice
  */
-export function useConversationMessages(conversationId: string, options: ConversationMessagesOptions = {}) {
+export function useConversationMessages(
+  conversationId: string,
+  channelVersion: number | null,
+  options: ConversationMessagesOptions = {},
+) {
   const [state, dispatch] = useReducer(conversationMessagesReducer, initialMessagesState);
   const [liveStatus, setLiveStatus] = useState<LiveStatus>('connecting');
   const [attempt, setAttempt] = useState(0);
@@ -58,10 +64,10 @@ export function useConversationMessages(conversationId: string, options: Convers
   // Realtime, once the conversation loaded (a failed load means no access or no network).
   const isReady = state.status === 'ready';
   useEffect(() => {
-    if (!isReady) return;
+    if (!isReady || channelVersion === null) return;
     let refetch: AbortController | null = null;
 
-    const unsubscribe = subscribeToConversation(conversationId, {
+    const unsubscribe = subscribeToConversation(conversationId, channelVersion, {
       onMessage: (message) => {
         dispatch({ type: 'received', messages: [message] });
         optionsRef.current.onActivity?.(message);
@@ -89,7 +95,7 @@ export function useConversationMessages(conversationId: string, options: Convers
       refetch?.abort();
       unsubscribe();
     };
-  }, [conversationId, isReady]);
+  }, [conversationId, channelVersion, isReady]);
 
   const deliver = useCallback(
     (clientId: string, content: string, attachments: Attachment[]) => {

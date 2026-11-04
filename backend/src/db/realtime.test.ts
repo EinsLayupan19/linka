@@ -33,7 +33,7 @@ describe('message.created broadcast', () => {
       clientId: randomUUID(),
     });
 
-    const events = await t.broadcastsOn(conversationTopic(conversationId), MESSAGE_CREATED_EVENT);
+    const events = await t.broadcastsOn(conversationTopic(conversationId, 0), MESSAGE_CREATED_EVENT);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ event: MESSAGE_CREATED_EVENT, private: true });
     // The payload is exactly the API's Message, so the client handles both the same way.
@@ -41,7 +41,7 @@ describe('message.created broadcast', () => {
   });
 
   it('includes only Message fields', async () => {
-    const events = await t.broadcastsOn(conversationTopic(conversationId), MESSAGE_CREATED_EVENT);
+    const events = await t.broadcastsOn(conversationTopic(conversationId, 0), MESSAGE_CREATED_EVENT);
     expect(Object.keys(events[0]!.payload as object).sort()).toEqual(
       ['attachments', 'clientId', 'content', 'conversationId', 'createdAt', 'deletedAt', 'editedAt', 'id', 'senderId', 'type'].sort(),
     );
@@ -50,16 +50,16 @@ describe('message.created broadcast', () => {
   it('does not broadcast a retried message a second time', async () => {
     const store = createMessageStore(t.db);
     const clientId = randomUUID();
-    const before = (await t.broadcastsOn(conversationTopic(conversationId), MESSAGE_CREATED_EVENT)).length;
+    const before = (await t.broadcastsOn(conversationTopic(conversationId, 0), MESSAGE_CREATED_EVENT)).length;
 
     await store.create(maya, conversationId, { content: 'Retry me', clientId });
     await store.create(maya, conversationId, { content: 'Retry me', clientId });
 
-    expect(await t.broadcastsOn(conversationTopic(conversationId), MESSAGE_CREATED_EVENT)).toHaveLength(before + 1);
+    expect(await t.broadcastsOn(conversationTopic(conversationId, 0), MESSAGE_CREATED_EVENT)).toHaveLength(before + 1);
   });
 
   it('does not broadcast a message whose transaction rolled back', async () => {
-    const before = (await t.broadcastsOn(conversationTopic(conversationId), MESSAGE_CREATED_EVENT)).length;
+    const before = (await t.broadcastsOn(conversationTopic(conversationId, 0), MESSAGE_CREATED_EVENT)).length;
     await t.client.transaction(async (tx) => {
       await tx.query("insert into messages (conversation_id, sender_id, content) values ($1, $2, 'never stored')", [
         conversationId,
@@ -67,7 +67,7 @@ describe('message.created broadcast', () => {
       ]);
       await tx.rollback();
     });
-    expect(await t.broadcastsOn(conversationTopic(conversationId), MESSAGE_CREATED_EVENT)).toHaveLength(before);
+    expect(await t.broadcastsOn(conversationTopic(conversationId, 0), MESSAGE_CREATED_EVENT)).toHaveLength(before);
   });
 
   it('never publishes on another conversation’s topic', async () => {
@@ -77,7 +77,7 @@ describe('message.created broadcast', () => {
     });
     await createMessageStore(t.db).create(outsider, other.id, { content: 'Elsewhere', clientId: randomUUID() });
 
-    const ours = await t.broadcastsOn(conversationTopic(conversationId), MESSAGE_CREATED_EVENT);
+    const ours = await t.broadcastsOn(conversationTopic(conversationId, 0), MESSAGE_CREATED_EVENT);
     expect(ours.some((e) => (e.payload as { content: string }).content === 'Elsewhere')).toBe(false);
   });
 });
@@ -109,16 +109,16 @@ describe('a broadcast failure never blocks sending', () => {
 
 describe('who may join conversation:<id>', () => {
   it('lets members join their conversation’s channel', async () => {
-    expect(await t.canJoinTopic('authenticated', maya, conversationTopic(conversationId))).toBe(true);
-    expect(await t.canJoinTopic('authenticated', jonas, conversationTopic(conversationId))).toBe(true);
+    expect(await t.canJoinTopic('authenticated', maya, conversationTopic(conversationId, 0))).toBe(true);
+    expect(await t.canJoinTopic('authenticated', jonas, conversationTopic(conversationId, 0))).toBe(true);
   });
 
   it('refuses signed-in users who are not members', async () => {
-    expect(await t.canJoinTopic('authenticated', outsider, conversationTopic(conversationId))).toBe(false);
+    expect(await t.canJoinTopic('authenticated', outsider, conversationTopic(conversationId, 0))).toBe(false);
   });
 
   it('refuses anonymous clients', async () => {
-    expect(await t.canJoinTopic('anon', null, conversationTopic(conversationId))).toBe(false);
+    expect(await t.canJoinTopic('anon', null, conversationTopic(conversationId, 0))).toBe(false);
   });
 
   it('refuses malformed and unknown topics without erroring', async () => {
@@ -130,17 +130,21 @@ describe('who may join conversation:<id>', () => {
   it('stops admitting someone once they leave a group', async () => {
     const store = createConversationStore(t.db);
     const { conversation } = await store.create(maya, { type: 'group', name: 'Leavers', memberIds: [outsider] });
-    expect(await t.canJoinTopic('authenticated', outsider, conversationTopic(conversation.id))).toBe(true);
+    expect(await t.canJoinTopic('authenticated', outsider, conversationTopic(conversation.id, 0))).toBe(true);
 
     await store.removeMember(outsider, conversation.id, outsider);
-    expect(await t.canJoinTopic('authenticated', outsider, conversationTopic(conversation.id))).toBe(false);
+    // Leaving moves the group to version 1: the leaver may join neither topic, the owner the new one.
+    for (const version of [0, 1]) {
+      expect(await t.canJoinTopic('authenticated', outsider, conversationTopic(conversation.id, version))).toBe(false);
+    }
+    expect(await t.canJoinTopic('authenticated', maya, conversationTopic(conversation.id, 1))).toBe(true);
   });
 
   it('does not let browser clients publish broadcasts (no INSERT policy)', async () => {
     await expect(
       t.asRole('authenticated', maya, (tx) =>
         tx.query("insert into realtime.messages (topic, extension, event, payload, private) values ($1, 'broadcast', 'message.created', '{}', true)", [
-          conversationTopic(conversationId),
+          conversationTopic(conversationId, 0),
         ]),
       ),
     ).rejects.toThrow(/row-level security/);

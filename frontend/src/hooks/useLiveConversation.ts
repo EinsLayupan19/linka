@@ -15,6 +15,8 @@ import { joinLiveConversation, type LiveConversation } from '../services/realtim
  */
 export function useLiveConversation(
   conversationId: string,
+  /** The conversation's channel version (null until known); a new one moves to its channel. */
+  channelVersion: number | null,
   myUserId: string,
   memberIds: ReadonlySet<string>,
   /** Join only once membership is confirmed (the conversation loaded). */
@@ -34,8 +36,8 @@ export function useLiveConversation(
   const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!enabled) return;
-    const connection = joinLiveConversation(conversationId, myUserId, {
+    if (!enabled || channelVersion === null) return;
+    const connection = joinLiveConversation(conversationId, channelVersion, myUserId, {
       onPresence: (userIds) => setOnline(userIds.filter((id) => id !== myUserId)),
       onTyping: (event) => {
         if (event.userId === myUserId || !members.current.has(event.userId)) return;
@@ -66,7 +68,7 @@ export function useLiveConversation(
       setOnline([]);
       setTyping(new Map());
     };
-  }, [conversationId, myUserId, enabled]);
+  }, [conversationId, channelVersion, myUserId, enabled]);
 
   // Expire typing indicators that were not refreshed in time.
   useEffect(() => {

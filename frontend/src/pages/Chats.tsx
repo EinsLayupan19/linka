@@ -1,6 +1,7 @@
 import { Outlet, useMatch } from 'react-router';
 import { ConversationList } from '../components/chat/ConversationList';
 import { useActivityReporter } from '../hooks/useActivityReporter';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 /**
  * Chat layout. Desktop: conversation list beside the open conversation.
@@ -27,6 +28,7 @@ export function Chats() {
 
 /** Desktop right pane when no conversation is open. */
 export function ChatsHome() {
+  useDocumentTitle('Chats');
   return (
     <div className="grid flex-1 place-items-center p-6 text-center">
       <div>

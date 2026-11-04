@@ -31,6 +31,9 @@ conversations ─────────┘
 | `0008_attachment_storage` | custom    | `private.attachments_json()`; attachments in message payloads; message triggers deferred to commit; the two private Storage buckets |
 | `0009_call_lifecycle`     | generated | `calls.last_heartbeat_at`; `calls_ongoing_idx` for the stale-call sweep |
 | `0010_call_signaling`     | custom    | `private.call_json()`; `call.updated` trigger (deferred) to each participant's user channel; `private.can_access_call_topic()` and the `call:<id>` signaling policies |
+| `0011_group_owner_invariant` | custom | Deferred constraint trigger `conversation_members_group_owner`: a transaction may not leave a group without an owner |
+| `0012_conversation_channel_version` | generated | `conversations.channel_version` |
+| `0013_versioned_realtime_topics` | custom | Topics `conversation:<id>:<version>` and `live:<id>:<version>`: `private.conversation_topic()`, `private.live_topic()`, `private.can_access_versioned_topic()`; the broadcast triggers publish there; removals bump the version |
 
 None are applied to a hosted database yet (no Supabase project).
 
@@ -74,6 +77,7 @@ No email column: email stays in Supabase `auth.users`.
 | `direct_low_user_id`  | `uuid` null         | 1:1 only, → `profiles`, `set null`                |
 | `direct_high_user_id` | `uuid` null         | 1:1 only, → `profiles`, `set null`                |
 | `created_at`, `updated_at` | `timestamptz`  |                                                   |
+| `channel_version`     | `integer`, default 0 | Part of the realtime topic names; +1 whenever a member leaves or is removed (Phase 10, see [Realtime authorization](#row-level-security)) |
 
 **1:1 uniqueness.** A 1:1 conversation stores its two users ordered (`low < high`, CHECK
 `conversations_direct_pair_order`) and the pair is unique (`conversations_direct_pair_unique`).
@@ -232,10 +236,10 @@ are built by `private.message_json()` and `private.iso()` to match the shared co
 
 | Trigger | When | Publishes |
 | ------- | ---- | --------- |
-| `messages_broadcast_created` (Phase 4) | after insert on `messages` | `message.created` on `conversation:<id>` |
+| `messages_broadcast_created` (Phase 4) | after insert on `messages` | `message.created` on `conversation:<id>:<version>` |
 | `messages_broadcast_activity` | after insert on `messages` (deferred to commit since Phase 6) | `conversation.activity` on each member's `user:<id>` (at most 100) |
-| `conversation_members_broadcast_markers` | a member's markers actually changed | `receipt.updated` on `conversation:<id>`; `conversation.read` on that member's `user:<id>` |
-| `conversation_members_broadcast_added` / `_removed` | per statement (transition tables) | `conversation.changed` to each affected user; one `conversation.updated` per conversation |
+| `conversation_members_broadcast_markers` | a member's markers actually changed | `receipt.updated` on `conversation:<id>:<version>`; `conversation.read` on that member's `user:<id>` |
+| `conversation_members_broadcast_added` / `_removed` | per statement (transition tables) | `conversation.changed` to each affected user; one `conversation.updated` per conversation. `_removed` then increments `channel_version` (Phase 10); unlike the publishing, that update is not caught, so if it fails the removal fails too |
 | `conversation_members_broadcast_role` | a role changed | `conversation.updated` |
 | `conversations_broadcast_renamed` | the name changed (not activity bumps) | `conversation.updated`; `conversation.changed` (updated) to each member |
 | `calls_broadcast_updated` (Phase 7) | insert, or a status change, on `calls` (deferred to commit; heartbeats do not publish) | `call.updated` (the full `Call`, participants included) on each participant's `user:<id>` |
@@ -294,16 +298,26 @@ write any of these tables. All writes go through the API, which validates input 
 **Realtime channels (`realtime.messages`, Supabase's table).** Policy
 `linka_conversation_members_receive_broadcasts`: `authenticated` users may `SELECT` Broadcast
 messages only when `private.can_access_conversation_topic((select realtime.topic()))` is true, i.e.
-the topic is exactly `conversation:<uuid>` and they are a member. Supabase uses this to authorize
-joining a private channel. No INSERT policy: browser clients cannot publish on these topics.
+the topic is exactly `conversation:<uuid>:<version>` (since Phase 10; `conversation:<uuid>` before),
+the version is the conversation's current `channel_version` and they are a member. Supabase uses
+this to authorize joining a private channel. No INSERT policy: browser clients cannot publish on
+these topics.
+
+**Why the version (Phase 10, migration `0013`).** Supabase remembers a channel's authorization for
+the connection until the access token refreshes, so membership checked at join time is not enough:
+a removed member's open channel kept receiving. Removals increment `channel_version` (after one last
+`conversation.updated` on the old topic), the database only publishes on the current version's
+topics, and only current members may join those. Topic checks go through
+`private.can_access_versioned_topic(topic, prefix)` (`SECURITY DEFINER`, empty `search_path`),
+which denies malformed topics without cast errors.
 
 **User and live channels (Phase 5).**
 
 - `linka_users_receive_own_events`: `SELECT` broadcast only on exactly `user:<auth.uid()>`
   (`private.can_access_user_topic`). No INSERT: only the database publishes there.
 - `linka_conversation_members_receive_live` and `linka_conversation_members_publish_live`: `SELECT`
-  and `INSERT` for broadcast and presence on `live:<uuid>`, for members
-  (`private.can_access_live_topic`).
+  and `INSERT` for broadcast and presence on `live:<uuid>:<version>` (current version only, since
+  Phase 10), for members (`private.can_access_live_topic`).
 
 **Call channels (Phase 7).** `linka_call_participants_receive_signals` and
 `linka_call_participants_publish_signals`: `SELECT` and `INSERT` of broadcasts on exactly
@@ -327,8 +341,8 @@ current user (`auth.uid()`), never for an arbitrary user.
 ## Security model
 
 - The API connects with a privileged database role, which **bypasses RLS**. Authorization for API
-  routes is therefore enforced in the backend services (`requireMembership`, role rules in
-  `conversationPermissions.ts`), always using the user ID from the verified access token.
+  routes is therefore enforced in the backend services (`requireMembership`, role rules from
+  `@linka/shared` `conversations/permissions.ts`), always using the user ID from the verified access token.
 - The browser holds the public Supabase key and can reach tables through Supabase's Data API and
   Realtime. RLS is what protects that path.
 

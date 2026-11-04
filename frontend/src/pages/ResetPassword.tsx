@@ -6,6 +6,7 @@ import { Alert } from '../components/ui/Alert';
 import { Button, buttonClassName } from '../components/ui/Button';
 import { TextField } from '../components/ui/TextField';
 import { useAuth } from '../hooks/useAuth';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { updatePassword } from '../services/auth';
 import { fieldErrors } from '../utils/formErrors';
 
@@ -16,6 +17,7 @@ const linkClassName = 'font-medium text-accent underline-offset-4 hover:underlin
  * (PASSWORD_RECOVERY), and this page lets them choose a new password.
  */
 export function ResetPassword() {
+  useDocumentTitle('Choose a new password');
   const { state } = useAuth();
   const [values, setValues] = useState({ password: '', confirmPassword: '' });
   const [errors, setErrors] = useState<Record<string, string>>({});

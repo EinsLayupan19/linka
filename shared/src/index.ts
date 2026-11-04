@@ -5,6 +5,7 @@ export * from './auth/credentials.js';
 export * from './calls/call.js';
 export * from './conversations/conversation.js';
 export * from './conversations/markers.js';
+export * from './conversations/permissions.js';
 export * from './messages/message.js';
 export * from './profiles/profile.js';
 export * from './realtime/events.js';

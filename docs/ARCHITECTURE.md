@@ -52,7 +52,8 @@ Express ──(verify signature with the project's PUBLIC keys, cached)──> J
 
 **Routes (frontend).** Signed-out: `/login`, `/register`, `/forgot-password`. From the reset email:
 `/reset-password`. Signed-in: `/onboarding` (choose a username), `/` (chats), `/conversations/new`
-(find someone by username), `/conversations/:conversationId`, `/profile`. Public: `/status`, 404.
+(find someone by username), `/conversations/new/group` (create a group), `/conversations/:conversationId`,
+`/profile`. Public: `/status`, 404.
 Desktop shows the conversation list beside the open conversation; mobile shows one at a time.
 
 **Profiles.** After the first login, users without a profile are sent to `/onboarding` to pick a
@@ -79,7 +80,7 @@ refresh token, so it cannot be renewed.
 | `config/`              | Loads and validates environment variables with Zod (fails fast)     |
 | `middleware/`          | Cross-cutting concerns: `requireAuth`, 404 handler, error handler   |
 | `routes/`              | URL -> handler mapping. Kept thin (`health`, `users`, `conversations`, `attachments`, `calls`) |
-| `services/`            | Business logic: `auth` (tokens), `profiles`, `conversations`, `membership`, `conversationPermissions`, `messages`, `markers`, `attachments`, `storage` (the only Storage client), `media` (avatar URLs), `calls` (call lifecycle), `health` |
+| `services/`            | Business logic: `auth` (tokens), `profiles`, `conversations`, `membership`, `messages`, `markers`, `attachments`, `storage` (the only Storage client), `media` (avatar URLs), `calls` (call lifecycle), `health` |
 | `validation/`          | `parseBody`: shared Zod schema -> parsed data or 400 with field errors |
 | `db/`                  | Drizzle client, schema and migrations                               |
 | `utils/`               | Small helpers (`AppError`, `cursor`, `fileSignature`)               |
@@ -120,7 +121,9 @@ refresh token, so it cannot be renewed.
 Bodies are strict: unknown fields (for example `id`, `createdBy`, `senderId`) are rejected with 400
 `VALIDATION_FAILED`. Responses are `Cache-Control: private, no-store`.
 
-**Role rules (groups).** Defined once in `services/conversationPermissions.ts`:
+**Role rules (groups).** Defined once in `@linka/shared` (`conversations/permissions.ts`): the API
+enforces them, and the web client imports the same functions to decide which actions to show (a
+hidden button is a convenience, never the protection; see [Group chats](#group-chats-phase-9)):
 
 | Action                       | owner                          | admin           | member |
 | ---------------------------- | ------------------------------ | --------------- | ------ |
@@ -277,12 +280,25 @@ At most **four channels per signed-in user**, whatever the number of conversatio
 | Topic                | Lifetime                    | Who joins          | Who publishes | Events |
 | -------------------- | --------------------------- | ------------------ | ------------- | ------ |
 | `user:<userId>`      | While signed in (any page, since Phase 7) | **that user only** | database only | `conversation.activity`, `conversation.read`, `conversation.changed`, `call.updated` |
-| `conversation:<id>`  | While that conversation is open | members        | database only | `message.created`, `receipt.updated`, `conversation.updated` |
-| `live:<id>`          | While that conversation is open | members        | members       | Presence, `typing` |
+| `conversation:<id>:<version>` | While that conversation is open | members | database only | `message.created`, `receipt.updated`, `conversation.updated` |
+| `live:<id>:<version>` | While that conversation is open | members      | members       | Presence, `typing` |
 | `call:<callId>`      | During a call (Phase 7)     | that call's participants, while it rings or is active | those participants | `signal` (WebRTC) |
 
 Every payload has a Zod contract in `@linka/shared` (`realtime/events.ts`) and is validated by the
-client before use; invalid events are dropped.
+client before use; invalid events are dropped. (Before Phase 10 the two conversation topics had no
+`:<version>`; see *Channel versions* below.)
+
+**Channel versions (Phase 10, migrations `0012`, `0013`).** Supabase checks a private channel when
+it is joined and remembers the answer for that connection until the access token is refreshed, so
+a member removed from a group with it open used to keep receiving its new messages for up to an
+hour. Each conversation now has a `channel_version` (in every `Conversation` as `channelVersion`),
+and both of its topics carry it. When anyone leaves or is removed, the database sends one last
+`conversation.updated` on the old topic and then increments the version, in the same transaction
+as the removal. Everyone with the group open refetches it: members get the new version and the
+client rejoins both channels under it (and refetches the newest messages, as after any rejoin); the
+removed member gets 404 ("Conversation not found"). From then on the database publishes only on the
+new topics, joining needs current membership, and old topics admit nobody. Additions, renames and
+role changes do not change the version.
 
 **Why the open conversation has two channels.** Supabase authorizes *publishing* when a client joins
 a channel (cached for the connection), not per event. If members could publish on
@@ -296,11 +312,14 @@ Policies on `realtime.messages` (migration `0006_live_state_events`), all for `a
 
 - `user:<id>`: `SELECT` (broadcast) only when the topic equals `'user:' || auth.uid()` exactly
   (`private.can_access_user_topic`). There is no pattern that admits other users, and no INSERT.
-- `live:<id>`: `SELECT` and `INSERT` for broadcast and presence when the topic is exactly
-  `live:<uuid>` and the user is a member (`private.can_access_live_topic`). This is the only topic
-  clients may publish on.
-- `conversation:<id>`: unchanged from Phase 4 (members receive broadcasts; nobody publishes;
-  presence is not allowed there).
+- `live:<id>:<version>`: `SELECT` and `INSERT` for broadcast and presence when the topic is exactly
+  `live:<uuid>:<version>`, the version is the conversation's current one and the user is a member
+  (`private.can_access_live_topic`). Apart from call channels, this is the only topic clients may
+  publish on.
+- `conversation:<id>:<version>`: members receive broadcasts on the current version only; nobody
+  publishes; presence is not allowed there (`private.can_access_conversation_topic`).
+- Both checks go through `private.can_access_versioned_topic` (migration `0013`), which denies
+  malformed topics without cast errors.
 - `call:<callId>` (Phase 7, migration `0010_call_signaling`): `SELECT` and `INSERT` of broadcasts
   for that call's participants while it rings or is active (`private.can_access_call_topic`).
 
@@ -402,8 +421,47 @@ becomes a generic `500 INTERNAL_ERROR`; the details are logged on the server onl
 shared shape `{ "error": { "code": "...", "message": "..." } }`.
 
 **Security baseline (Phase 1).** `helmet` security headers, CORS restricted to `CORS_ORIGIN`, JSON body
-limit of 100 kB, no stack traces in responses. Token verification arrived in Phase 2; rate limiting
-is part of the Phase 9 audit (Supabase Auth applies its own rate limits to sign-in and emails).
+limit of 100 kB, no stack traces in responses. Token verification arrived in Phase 2, rate limits
+in Phase 10 (below). Sign-in, sign-up and password emails go to Supabase Auth directly, which applies
+its own rate limits to them.
+
+**Rate limits (Phase 10, `middleware/rateLimit.ts`).** Fixed one-minute windows, counted in the API
+process's memory. Over a limit the API answers `429 RATE_LIMITED` with `Retry-After` (seconds) and
+a message the web client shows as is.
+
+| Limit | Counted per | Per minute |
+| ----- | ----------- | ---------- |
+| Requests without a valid access token (missing, expired, invalid) | IP | 60 (past it: 429 instead of 401) |
+| `GET /api/health` | IP | 120 |
+| Everything a signed-in user does, together | user | 600 |
+| Sending a message | user | 120 |
+| User search | user | 60 |
+| Creating a conversation | user | 20 |
+| Group changes (rename, add, remove, roles, leave) | user | 60 |
+| Starting a call | user | 10 |
+| Starting an upload, setting a profile picture | user | 60 |
+
+- Signed-in requests count per user (the id from the verified token), so many people behind one
+  office or campus network do not share an allowance. Only requests without a valid token count
+  per IP. A token that cannot be checked because the signing keys are unreachable (503) does not
+  count: that is not the client's doing.
+- The IP comes from Express's `req.ip`. `TRUST_PROXY` (default `0`) is the number of proxies in
+  front of the API whose `X-Forwarded-For` entries are trusted: `0` locally (the header is ignored,
+  so nobody can choose their own bucket), `1` on Render.
+- The limits sit well above what the web client does in normal use (search is debounced, receipts
+  are batched, a call sends one heartbeat every 20 s).
+- **One process only.** With several API instances each counts separately, so a client could get
+  each limit once per instance. Scaling out needs a shared store (for example Redis) behind the
+  same `RateLimiter` interface.
+
+**Membership changes are serialized (Phase 10).** Adding, removing, leaving, role changes and
+ownership transfers run in one transaction that first locks the conversation's row
+(`SELECT ... FOR UPDATE`) and checks the caller's role and the rules only after the lock. Before,
+two requests could both pass their checks and together leave a group without an owner (a transfer
+to someone being removed at that moment). On top of that, a deferred constraint trigger (migration
+`0011`, `conversation_members_group_owner`) refuses at commit any transaction that leaves a group
+without an owner; the API turns that into `409 OWNER_CANNOT_LEAVE`. Deleting a whole group or an
+owner's account is not blocked by it.
 
 ## Files and media (Phase 6)
 
@@ -629,11 +687,44 @@ transceivers a remote offer reuses), fake media tracks, and the Realtime stand-i
 check the channel policy and trigger on PGlite. Two-browser checks on a real Supabase project are
 listed in DEVELOPMENT_STATUS.md.
 
+## Group chats (Phase 9)
+
+The API, database rules and realtime events for groups date from Phases 3 to 5 (see the
+conversation API and role rules above); Phase 9 is the web client for them. Nothing new on the
+server: no routes, no migrations, no new events.
+
+```text
+NewGroup page ──POST /api/conversations {type:'group', name, memberIds}──> API (caller = owner)
+GroupInfoDialog ──PATCH name / POST members / PATCH member role / DELETE member──> API
+API ──> PostgreSQL triggers ──> conversation.updated on conversation:<id>:<version>   (whoever has it open refetches)
+                           └──> conversation.changed on user:<id>         (lists: added / removed / renamed)
+```
+
+- **Who may do what.** The dialog decides which buttons to show with the shared rules
+  (`canEditGroup`, `canAddMembers`, `removalDecision`, `canChangeRole`), so the web client can never
+  offer more than the API allows. The API still checks every request with the same functions and the
+  caller's role from the database; if the role changed meanwhile, its refusal (403, 409) is shown.
+- **After a change.** Rename, add and role changes return the updated group, which replaces the
+  chat's copy and the list's (`upsertConversation`), so everything shows it immediately. A removal
+  (204) removes the member locally. Leaving removes the group from the list and goes to `/`. The
+  `conversation.updated` that follows refetches the group anyway, so other people's changes appear
+  the same way.
+- **Being removed.** `conversation.changed` (`removed`) drops the group from that person's list, and
+  the refetch after `conversation.updated` answers 404, so the open page shows "Conversation not
+  found". The API refuses them history, sending and files immediately, and since Phase 10 their
+  open channels receive nothing more either (*Channel versions* above).
+- **Building blocks.** `components/ui/Dialog.tsx` (native `<dialog>`: focus trap, Escape, inert
+  page behind, focus returned to the opener), `components/people/PeoplePicker.tsx` (multi-select
+  over `hooks/useUserSearch.ts`, shared with New chat), `components/chat/ConversationAvatar.tsx`
+  (1:1: the other person; group: two members' faces), `components/group/GroupInfoDialog.tsx`.
+- **Confirmation.** Removing someone, transferring ownership and leaving each ask first and say what
+  will happen. Promoting and demoting an admin do not (they are reversible by the same owner).
+
 ## Frontend (`frontend/src`)
 
 | Folder       | Responsibility                                              |
 | ------------ | ----------------------------------------------------------- |
-| `pages/`     | Route-level screens (`Chats` layout, `Chat`, `NewChat`, profile, auth) |
+| `pages/`     | Route-level screens (`Chats` layout, `Chat`, `NewChat`, `NewGroup`, profile, auth) |
 | `components/`| `ui/` primitives, `layout/` shell and error boundary, feature folders |
 | `hooks/`     | State + side effects for components                         |
 | `services/`  | API / Supabase calls, one function per operation            |
@@ -652,11 +743,34 @@ inputs, errors below (linked with `aria-describedby`), form-level messages use `
 
 **Motion.** Kept minimal and functional: button hover/press feedback and a short linear catch-up on
 upload progress bars, all disabled under `prefers-reduced-motion`. Loading placeholders are static (no looping animation). New messages
-appear without animation: they arrive constantly, so motion there would be noise.
+appear without animation: they arrive constantly, so motion there would be noise. The call panel and
+dialogs rise in once (180 ms, fade and 0.5rem) because they open rarely and on purpose; dialogs close
+instantly, and moving between a dialog's views is instant too.
 
 **Chat accessibility.** The message list is a `role="log"` region (new messages are announced
 politely); the composer has a label; Enter sends and Shift+Enter adds a line (not while an input
 method is composing); failed sends and the reconnecting notice are announced.
+
+**Page accessibility (Phase 10).**
+
+- Every page names itself in the browser tab with `useDocumentTitle` ("Log in · Linka", the
+  conversation's name in a chat). Moving between pages inside the app does not make screen readers
+  read anything by itself, so `components/layout/PageAnnouncer.tsx` (a polite live region) follows
+  `document.title` and announces the new page's name.
+- Pages in the app shell (the signed-in pages and *Page not found*) start with a **Skip to
+  content** link, visible on focus, to `<main id="main">`. The sign-in pages have no header to skip.
+- Every control has a visible `focus-visible` outline. Form fields use their own border token
+  (`--color-field`), which reaches 3:1 against the surface in both themes; the lighter `line`
+  token is kept for decorative dividers only.
+- An action that is not available but should still be explained (the owner's **Leave group**) is
+  `aria-disabled` rather than `disabled`, so keyboard and screen reader users can reach it and hear
+  why.
+
+**Code splitting (Phase 10).** The chats layout and chat page load with the app. Every other page
+is loaded the first time it is visited (`React.lazy` in `App.tsx`, with a static loading state), and
+React, supabase-js and Zod sit in their own files (`vite.config.ts`), which change far less often
+than Linka's code and stay cached across releases. No file is above 500 kB anymore (the largest,
+React, is about 257 kB, 82 kB gzipped).
 
 ## Environment and secrets
 
@@ -682,4 +796,6 @@ Notes collected so far:
   Render restart a healthy API. The body reports `status: "degraded"` instead.
 - `VITE_API_URL` must be set on Vercel; it defaults to `http://localhost:3000` otherwise.
 - Render needs `SUPABASE_SECRET_KEY` (server-only) for uploads; Vercel must never get it.
+- Render needs `TRUST_PROXY=1` (one proxy in front of the API), or every signed-out request counts
+  against the proxy's IP for rate limiting (see *Rate limits*).
 - Vercel needs an SPA rewrite so deep links (e.g. `/chats/123`) serve `index.html`.

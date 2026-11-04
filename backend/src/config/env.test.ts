@@ -76,6 +76,15 @@ describe('parseEnv', () => {
     }
   });
 
+  it('trusts no proxy by default, and accepts a number of proxy hops', () => {
+    expect(parseEnv({}).TRUST_PROXY).toBe(0);
+    expect(parseEnv({ TRUST_PROXY: '' }).TRUST_PROXY).toBe(0);
+    expect(parseEnv({ TRUST_PROXY: '1' }).TRUST_PROXY).toBe(1);
+    for (const value of ['-1', 'yes', '1.5', '11']) {
+      expect(() => parseEnv({ TRUST_PROXY: value })).toThrow(/TRUST_PROXY/);
+    }
+  });
+
   it('never includes variable values in the error message', () => {
     const secret = 'mysql://admin:SuperSecret123@host/db';
 
