@@ -1,7 +1,7 @@
 import { AuthApiError, AuthRetryableFetchError } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 import { authMock, fakeSession } from '../test/supabaseMock';
-import { AuthError, requestPasswordReset, signIn, signOut, signUp, updatePassword } from './auth';
+import { AuthError, requestPasswordReset, signIn, signOut, signOutOtherDevices, signUp, updatePassword } from './auth';
 
 vi.mock('../lib/supabase', async () => (await import('../test/supabaseMock')).supabaseModule);
 
@@ -141,6 +141,21 @@ describe('signOut / password reset', () => {
   it('signs out of this device only', async () => {
     await signOut();
     expect(authMock.signOut).toHaveBeenCalledWith({ scope: 'local' });
+  });
+
+  it('can sign out of every device, this one included', async () => {
+    await signOut({ everywhere: true });
+    expect(authMock.signOut).toHaveBeenCalledWith({ scope: 'global' });
+  });
+
+  it('can sign out of every other device, keeping this one', async () => {
+    await signOutOtherDevices();
+    expect(authMock.signOut).toHaveBeenCalledWith({ scope: 'others' });
+  });
+
+  it('reports a failure to sign out other devices as a connection problem when offline', async () => {
+    authMock.signOut.mockResolvedValueOnce({ error: new AuthRetryableFetchError('Failed to fetch', 0) } as never);
+    await expect(signOutOtherDevices()).rejects.toThrow(/Could not reach/);
   });
 
   it('sends reset links back to the reset page', async () => {

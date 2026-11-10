@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { updateProfileSchema } from '@linka/shared';
+import { SignOutButton } from '../components/auth/SignOutButton';
 import { AvatarEditor } from '../components/profile/AvatarEditor';
 import { ThemeSelect } from '../components/theme/ThemeSelect';
 import { Alert } from '../components/ui/Alert';
@@ -102,6 +103,19 @@ export function Profile() {
           </Button>
         </div>
       </form>
+
+      <section aria-labelledby="sessions-heading" className="mt-10 border-t border-line pt-6">
+        <h2 id="sessions-heading" className="text-lg font-semibold tracking-tight">
+          Sessions
+        </h2>
+        <p className="mt-1 max-w-[60ch] text-sm text-ink-muted">
+          Signs you out on every device where you use Linka, including this one. Use it if you signed in on a
+          device you no longer use, or think someone else might be signed in.
+        </p>
+        <div className="mt-4">
+          <SignOutButton everywhere />
+        </div>
+      </section>
     </div>
   );
 }

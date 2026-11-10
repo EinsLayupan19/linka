@@ -3,10 +3,11 @@ import { signOut } from '../../services/auth';
 import { Button } from '../ui/Button';
 
 /**
- * Signs out on this device. The auth listener then switches the app to signed-out,
- * and protected pages redirect to /login.
+ * Signs out on this device, or with `everywhere` on every device of the account (this one
+ * included). The auth listener then switches the app to signed-out, and protected pages redirect
+ * to /login.
  */
-export function SignOutButton() {
+export function SignOutButton({ everywhere = false }: { everywhere?: boolean }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -14,7 +15,7 @@ export function SignOutButton() {
     setPending(true);
     setError(null);
     try {
-      await signOut();
+      await signOut({ everywhere });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not log out. Try again.');
       setPending(false);
@@ -22,14 +23,14 @@ export function SignOutButton() {
   }
 
   return (
-    <span className="inline-flex items-center gap-3">
+    <span className="inline-flex flex-wrap items-center gap-3">
       {error && (
         <span role="alert" className="text-sm text-danger">
           {error}
         </span>
       )}
       <Button variant="secondary" onClick={handleClick} disabled={pending}>
-        {pending ? 'Logging out…' : 'Log out'}
+        {pending ? 'Logging out…' : everywhere ? 'Log out of all devices' : 'Log out'}
       </Button>
     </span>
   );

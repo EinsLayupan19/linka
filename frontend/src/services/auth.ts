@@ -87,9 +87,21 @@ export async function signIn(input: LoginInput): Promise<void> {
   if (error) throw toAuthError(error);
 }
 
-/** Signs out on this device and revokes this session's refresh token. */
-export async function signOut(): Promise<void> {
-  const { error } = await getSupabase().auth.signOut({ scope: 'local' });
+/**
+ * Signs out on this device and revokes this session's refresh token. With `everywhere`, revokes
+ * every session of the account (all devices, this one included).
+ *
+ * Revoking stops sessions from being renewed; an access token already issued keeps working until
+ * it expires (Supabase's access-token lifetime, 1 hour by default).
+ */
+export async function signOut(options: { everywhere?: boolean } = {}): Promise<void> {
+  const { error } = await getSupabase().auth.signOut({ scope: options.everywhere ? 'global' : 'local' });
+  if (error) throw toAuthError(error);
+}
+
+/** Revokes every other session of the account, keeping this device signed in (after a password reset). */
+export async function signOutOtherDevices(): Promise<void> {
+  const { error } = await getSupabase().auth.signOut({ scope: 'others' });
   if (error) throw toAuthError(error);
 }
 

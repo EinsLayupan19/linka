@@ -1,10 +1,12 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { AuthRetryableFetchError } from '@supabase/supabase-js';
 import { Route, Routes } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import { RequireProfile } from '../components/auth/RouteGuards';
 import { mockApi, type ApiCall } from '../test/api';
 import { jsonResponse, mockFetch } from '../test/fetch';
 import { renderWithAuth, testProfile } from '../test/render';
+import { authMock } from '../test/supabaseMock';
 import { Onboarding } from './Onboarding';
 import { Profile } from './Profile';
 
@@ -232,5 +234,38 @@ describe('Profile', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/Could not reach the server/);
+  });
+});
+
+describe('Profile: sessions', () => {
+  it('logs out of every device, this one included', async () => {
+    profileApi();
+    renderProfile();
+
+    const sessions = await screen.findByRole('region', { name: 'Sessions' });
+    expect(within(sessions).getByText(/every device where you use Linka, including this one/)).toBeInTheDocument();
+    fireEvent.click(within(sessions).getByRole('button', { name: 'Log out of all devices' }));
+
+    await waitFor(() => expect(authMock.signOut).toHaveBeenCalledWith({ scope: 'global' }));
+  });
+
+  it('keeps the ordinary log out for this device only', async () => {
+    profileApi();
+    renderProfile();
+    await screen.findByRole('region', { name: 'Sessions' });
+
+    expect(authMock.signOut).not.toHaveBeenCalled();
+  });
+
+  it('shows why logging out everywhere failed, and lets the user try again', async () => {
+    authMock.signOut.mockResolvedValueOnce({ error: new AuthRetryableFetchError('Failed to fetch', 0) } as never);
+    profileApi();
+    renderProfile();
+
+    const sessions = await screen.findByRole('region', { name: 'Sessions' });
+    fireEvent.click(within(sessions).getByRole('button', { name: 'Log out of all devices' }));
+
+    expect(await within(sessions).findByRole('alert')).toHaveTextContent(/Could not reach the authentication service/);
+    expect(within(sessions).getByRole('button', { name: 'Log out of all devices' })).toBeEnabled();
   });
 });

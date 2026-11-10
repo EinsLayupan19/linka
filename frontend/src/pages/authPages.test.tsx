@@ -15,6 +15,7 @@ vi.mock('../services/auth', async (importOriginal) => ({
   signUp: vi.fn(),
   requestPasswordReset: vi.fn(),
   updatePassword: vi.fn(),
+  signOutOtherDevices: vi.fn(),
 }));
 
 const signedOut = { status: 'signed_out' } as const;
@@ -167,6 +168,49 @@ describe('ResetPassword', () => {
     expect(authService.updatePassword).toHaveBeenCalledWith(
       expect.objectContaining({ password: 'brand new pass' }),
     );
+  });
+
+  it('signs out every other device once the new password is saved, and says so', async () => {
+    vi.mocked(authService.updatePassword).mockResolvedValue();
+    vi.mocked(authService.signOutOtherDevices).mockResolvedValue();
+    renderWithAuth(<ResetPassword />, { auth: signedIn() });
+
+    type('New password', 'brand new pass');
+    type('Confirm new password', 'brand new pass');
+    submit('Save new password');
+
+    expect(await screen.findByRole('heading', { name: 'Password updated' })).toBeInTheDocument();
+    expect(screen.getByText(/Other devices have been signed out/)).toBeInTheDocument();
+    expect(authService.signOutOtherDevices).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(authService.signOutOtherDevices).mock.invocationCallOrder[0]).toBeGreaterThan(
+      vi.mocked(authService.updatePassword).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('keeps the new password when other devices could not be signed out, and explains what to do', async () => {
+    vi.mocked(authService.updatePassword).mockResolvedValue();
+    vi.mocked(authService.signOutOtherDevices).mockRejectedValue(new AuthError('Could not reach the authentication service.'));
+    renderWithAuth(<ResetPassword />, { auth: signedIn() });
+
+    type('New password', 'brand new pass');
+    type('Confirm new password', 'brand new pass');
+    submit('Save new password');
+
+    expect(await screen.findByRole('heading', { name: 'Password updated' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(/could not sign out your other devices/i);
+    expect(screen.getByRole('status')).toHaveTextContent(/Log out of all devices/);
+  });
+
+  it('does not touch other devices when saving the password fails', async () => {
+    vi.mocked(authService.updatePassword).mockRejectedValue(new AuthError('Choose a password different from your current one.'));
+    renderWithAuth(<ResetPassword />, { auth: signedIn() });
+
+    type('New password', 'brand new pass');
+    type('Confirm new password', 'brand new pass');
+    submit('Save new password');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Choose a password different');
+    expect(authService.signOutOtherDevices).not.toHaveBeenCalled();
   });
 
   it('rejects mismatched passwords', async () => {

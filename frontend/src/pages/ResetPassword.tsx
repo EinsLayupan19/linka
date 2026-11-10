@@ -7,7 +7,7 @@ import { Button, buttonClassName } from '../components/ui/Button';
 import { TextField } from '../components/ui/TextField';
 import { useAuth } from '../hooks/useAuth';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { updatePassword } from '../services/auth';
+import { signOutOtherDevices, updatePassword } from '../services/auth';
 import { fieldErrors } from '../utils/formErrors';
 
 const linkClassName = 'font-medium text-accent underline-offset-4 hover:underline';
@@ -24,6 +24,8 @@ export function ResetPassword() {
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
+  /** Whether every other session was ended after the new password was saved. */
+  const [othersSignedOut, setOthersSignedOut] = useState(false);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -38,6 +40,14 @@ export function ResetPassword() {
     setSubmitting(true);
     try {
       await updatePassword(parsed.data);
+      // Whoever had the old password may still be signed in elsewhere: end those sessions, keep
+      // this one. The new password is saved either way; a failure here is only reported.
+      try {
+        await signOutOtherDevices();
+        setOthersSignedOut(true);
+      } catch {
+        setOthersSignedOut(false);
+      }
       setDone(true);
     } catch (error) {
       setFormError(error instanceof Error ? error.message : 'Something went wrong. Please try again.');
@@ -52,7 +62,14 @@ export function ResetPassword() {
     return (
       <>
         <h1 className="text-2xl font-semibold tracking-tight">Password updated</h1>
-        <p className="mt-2 text-ink-muted">You are signed in with your new password.</p>
+        <p className="mt-2 text-ink-muted">
+          You are signed in with your new password.{othersSignedOut ? ' Other devices have been signed out.' : ''}
+        </p>
+        {!othersSignedOut && (
+          <p role="status" className="mt-3 max-w-[60ch] text-sm text-warning">
+            We could not sign out your other devices. To be safe, use Log out of all devices on your profile page.
+          </p>
+        )}
         <Link to="/" className={`mt-8 ${buttonClassName}`}>
           Continue to Linka
         </Link>
