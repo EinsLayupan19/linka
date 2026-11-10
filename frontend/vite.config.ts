@@ -1,19 +1,35 @@
 import { fileURLToPath } from 'node:url';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import { loadEnv } from 'vite';
+import { loadEnv, type Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
 import { assertBuildEnv } from './src/lib/buildEnv.ts';
+import { addContentSecurityPolicy } from './src/lib/contentSecurityPolicy.ts';
+
+/**
+ * Adds the Content-Security-Policy to the built index.html, from the same addresses the app is
+ * built with. Build only: the dev server needs inline scripts for hot reloading.
+ */
+function contentSecurityPolicy(env: Record<string, string>): Plugin {
+  return {
+    name: 'linka-content-security-policy',
+    apply: 'build',
+    transformIndexHtml: {
+      // After Vite's own changes, so the hashes cover the final inline scripts.
+      order: 'post',
+      handler: (html) => addContentSecurityPolicy(html, { apiUrl: env.VITE_API_URL!, supabaseUrl: env.VITE_SUPABASE_URL! }),
+    },
+  };
+}
 
 export default defineConfig(({ mode, command }) => {
   // `vite build` (local or on the host) stops here if a variable is missing, not https, or a
   // secret key. loadEnv reads frontend/.env and the host's environment (which wins).
-  if (command === 'build') {
-    assertBuildEnv(loadEnv(mode, fileURLToPath(new URL('.', import.meta.url)), 'VITE_'));
-  }
+  const env = command === 'build' ? loadEnv(mode, fileURLToPath(new URL('.', import.meta.url)), 'VITE_') : {};
+  if (command === 'build') assertBuildEnv(env);
 
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), ...(command === 'build' ? [contentSecurityPolicy(env)] : [])],
     // Tests never read frontend/.env, so real credentials cannot leak into test runs.
     envDir: mode === 'test' ? false : undefined,
     server: {
