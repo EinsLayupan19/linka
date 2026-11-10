@@ -8,6 +8,7 @@ import {
   type Message,
 } from '@linka/shared';
 import { toApiError, type ApiError } from '../lib/api';
+import { loadWithPrefetch, prefetchKeys } from '../lib/prefetch';
 import { listConversations } from '../services/conversations';
 import { subscribeToUser, type LiveStatus } from '../services/realtime';
 import { createDeliveryReporter, type DeliveryReporter } from '../services/receipts';
@@ -137,7 +138,12 @@ export function useConversationList(
 
   useEffect(() => {
     const controller = new AbortController();
-    listConversations(controller.signal).then(
+    // The first load can use the list started during sign-in; every refresh asks the server.
+    const load =
+      attempt === 0
+        ? loadWithPrefetch(prefetchKeys.conversations(myUserId), controller.signal, listConversations)
+        : listConversations(controller.signal);
+    load.then(
       (conversations) => {
         counted.current.clear();
         setList({ status: 'ready', conversations });

@@ -1,8 +1,11 @@
-import { useMemo } from 'react';
-import { Link, Navigate, Outlet, useLocation } from 'react-router';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, matchPath, Navigate, Outlet, useLocation } from 'react-router';
 import { ProfileContext } from '../../hooks/useProfile';
 import { useAuth } from '../../hooks/useAuth';
 import { useMyProfile } from '../../hooks/useMyProfile';
+import { prefetch, prefetchKeys } from '../../lib/prefetch';
+import { getConversation, listConversations } from '../../services/conversations';
+import { listMessages } from '../../services/messages';
 import { safeRedirectPath, type RedirectState } from '../../utils/redirect';
 import { PageLoading, PageMessage } from '../layout/PageStatus';
 import { Button, secondaryButtonClassName } from '../ui/Button';
@@ -50,11 +53,36 @@ export function RedirectIfSignedIn() {
 }
 
 /**
+ * Starts what the chat screens will need (the conversation list and, when the app opens on one,
+ * that conversation) while the profile is still loading, instead of after it. The screens pick
+ * these results up on their first load (see lib/prefetch.ts). Runs once per signed-in user.
+ */
+function usePrefetchChats() {
+  const { state } = useAuth();
+  const userId = state.status === 'signed_in' ? state.session.user.id : null;
+  // Where the app opened (later navigation loads on demand as before).
+  const { pathname } = useLocation();
+  const [path] = useState(pathname);
+
+  useEffect(() => {
+    if (!userId) return;
+    prefetch(prefetchKeys.conversations(userId), () => listConversations());
+    const conversationId = matchPath('/conversations/:conversationId', path)?.params.conversationId;
+    if (conversationId && conversationId !== 'new') {
+      prefetch(prefetchKeys.conversation(userId, conversationId), () => getConversation(conversationId));
+      prefetch(prefetchKeys.messages(userId, conversationId), () => listMessages(conversationId));
+    }
+  }, [userId, path]);
+}
+
+/**
  * Loads the signed-in user's profile and shares it with the pages below.
  * Users without a profile are sent to /onboarding to set one up.
  */
 export function RequireProfile() {
+  // The profile request goes first (it gates the page); the chat prefetch right after it.
   const { state, retry, setProfile } = useMyProfile();
+  usePrefetchChats();
   const profile = state.status === 'ready' ? state.profile : null;
   const value = useMemo(() => (profile ? { profile, setProfile } : null), [profile, setProfile]);
 

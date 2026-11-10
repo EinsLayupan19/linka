@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, configure } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
+import { clearPrefetched } from '../lib/prefetch';
 import { realtimeChannels } from './supabaseMock';
 
 // Pages are loaded on first use (code splitting). In tests, Vite compiles such a page the first
@@ -24,6 +25,8 @@ if (!HTMLDialogElement.prototype.showModal) {
 afterEach(() => {
   realtimeChannels.length = 0;
   cleanup();
+  // Module-level start-up cache: one test's fake data must never reach the next test.
+  clearPrefetched();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   // Puts every vi.fn() back to its original implementation (e.g. the Supabase mock defaults).

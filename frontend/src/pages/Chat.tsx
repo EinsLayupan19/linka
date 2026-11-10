@@ -15,6 +15,7 @@ import { useLiveConversation } from '../hooks/useLiveConversation';
 import { useProfile } from '../hooks/useProfile';
 import { useReadTracking } from '../hooks/useReadTracking';
 import { toApiError, type ApiError } from '../lib/api';
+import { loadWithPrefetch, prefetchKeys } from '../lib/prefetch';
 import { getConversation } from '../services/conversations';
 import { conversationTitle, otherMember } from '../utils/conversation';
 import { receiptLabel, withMarkers } from '../utils/receipts';
@@ -51,14 +52,20 @@ function ConversationScreen({ conversationId }: { conversationId: string }) {
   const [detailsAttempt, setDetailsAttempt] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
-    getConversation(conversationId, controller.signal).then(
+    const fetchDetails = (signal: AbortSignal) => getConversation(conversationId, signal);
+    // The first load may use the details started during sign-in; refetches after a change never do.
+    const load =
+      detailsAttempt === 0
+        ? loadWithPrefetch(prefetchKeys.conversation(profile.id, conversationId), controller.signal, fetchDetails)
+        : fetchDetails(controller.signal);
+    load.then(
       (conversation) => setDetails({ status: 'ready', conversation }),
       (error: unknown) => {
         if (!controller.signal.aborted) setDetails({ status: 'error', error: toApiError(error) });
       },
     );
     return () => controller.abort();
-  }, [conversationId, detailsAttempt]);
+  }, [conversationId, detailsAttempt, profile.id]);
 
   const updateMembers = useCallback((event: Pick<ReceiptUpdatedEvent, 'userId' | 'lastDeliveredAt' | 'lastReadAt'>) => {
     setDetails((current) =>
@@ -98,6 +105,7 @@ function ConversationScreen({ conversationId }: { conversationId: string }) {
     onReceived,
     onReceipt: updateMembers,
     onConversationUpdated: () => setDetailsAttempt((n) => n + 1),
+    prefetchKey: prefetchKeys.messages(profile.id, conversationId),
   });
 
   const me = conversation?.members.find((m) => m.userId === profile.id);

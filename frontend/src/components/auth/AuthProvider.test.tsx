@@ -2,6 +2,7 @@ import { act, render, screen } from '@testing-library/react';
 import type { Session } from '@supabase/supabase-js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuth } from '../../hooks/useAuth';
+import { loadWithPrefetch, prefetch } from '../../lib/prefetch';
 import { attachmentUrl, clearAttachmentUrls } from '../../services/attachmentUrls';
 import { mockApi } from '../../test/api';
 import { jsonResponse } from '../../test/fetch';
@@ -106,6 +107,20 @@ describe('AuthProvider', () => {
     auth.emit('SIGNED_OUT', null);
     await attachmentUrl(id);
     expect(api.calls).toHaveLength(2);
+  });
+
+  it('forgets prefetched start-up data on sign-out', async () => {
+    const auth = captureListener();
+    render(
+      <AuthProvider>
+        <ShowAuth />
+      </AuthProvider>,
+    );
+    auth.emit('SIGNED_IN', fakeSession());
+    prefetch('start-up', async () => 'previous user');
+
+    auth.emit('SIGNED_OUT', null);
+    await expect(loadWithPrefetch('start-up', new AbortController().signal, async () => 'fresh')).resolves.toBe('fresh');
   });
 
   it('treats a password-recovery link as a signed-in session', () => {

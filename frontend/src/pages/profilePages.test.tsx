@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { Route, Routes } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import { RequireProfile } from '../components/auth/RouteGuards';
+import { mockApi, type ApiCall } from '../test/api';
 import { jsonResponse, mockFetch } from '../test/fetch';
 import { renderWithAuth, testProfile } from '../test/render';
 import { Onboarding } from './Onboarding';
@@ -93,9 +94,22 @@ describe('Onboarding', () => {
   });
 });
 
+/**
+ * Answers by method and path, not by call order: signed-in pages also load the conversation list
+ * in parallel with the profile (see RequireProfile), which these tests do not care about.
+ */
+function profileApi(onSave?: (call: ApiCall) => Response | Promise<Response>) {
+  return mockApi((call) => {
+    if (call.method === 'GET' && call.path === '/api/users/me') return jsonResponse(testProfile());
+    if (call.method === 'PATCH' && call.path === '/api/users/me' && onSave) return onSave(call);
+    if (call.method === 'GET' && call.path === '/api/conversations') return jsonResponse({ conversations: [] });
+    return undefined;
+  });
+}
+
 describe('Profile', () => {
   it('shows the profile and the signed-in email', async () => {
-    mockFetch().mockResolvedValueOnce(jsonResponse(testProfile()));
+    profileApi();
     renderProfile();
 
     expect(await screen.findByRole('heading', { name: 'Maya Reyes' })).toBeInTheDocument();
@@ -105,10 +119,7 @@ describe('Profile', () => {
   });
 
   it('saves a new display name', async () => {
-    const fetchMock = mockFetch();
-    fetchMock
-      .mockResolvedValueOnce(jsonResponse(testProfile()))
-      .mockResolvedValueOnce(jsonResponse(testProfile({ displayName: 'Maya R.' })));
+    const api = profileApi(() => jsonResponse(testProfile({ displayName: 'Maya R.' })));
     renderProfile();
 
     await screen.findByLabelText('Display name');
@@ -117,14 +128,13 @@ describe('Profile', () => {
 
     expect(await screen.findByRole('status')).toHaveTextContent('Profile saved.');
     expect(screen.getByRole('heading', { name: 'Maya R.' })).toBeInTheDocument();
-    const [, init] = fetchMock.mock.calls[1]!;
-    expect(init?.method).toBe('PATCH');
-    expect(JSON.parse(String(init?.body))).toEqual({ displayName: 'Maya R.' });
+    const saves = api.callsTo('PATCH', '/api/users/me');
+    expect(saves).toHaveLength(1);
+    expect(saves[0]!.body).toEqual({ displayName: 'Maya R.' });
   });
 
   it('rejects an empty display name', async () => {
-    const fetchMock = mockFetch();
-    fetchMock.mockResolvedValueOnce(jsonResponse(testProfile()));
+    const api = profileApi(() => jsonResponse(testProfile()));
     renderProfile();
 
     await screen.findByLabelText('Display name');
@@ -132,13 +142,12 @@ describe('Profile', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     expect(await screen.findByText('Enter a display name.')).toBeInTheDocument();
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.callsTo('GET', '/api/users/me')).toHaveLength(1));
+    expect(api.callsTo('PATCH', '/api/users/me')).toHaveLength(0);
   });
 
   it('shows a save error', async () => {
-    mockFetch()
-      .mockResolvedValueOnce(jsonResponse(testProfile()))
-      .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    profileApi(() => Promise.reject(new TypeError('Failed to fetch')));
     renderProfile();
 
     await screen.findByLabelText('Display name');

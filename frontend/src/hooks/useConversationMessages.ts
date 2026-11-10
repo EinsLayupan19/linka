@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import type { Attachment, Message, ReceiptUpdatedEvent } from '@linka/shared';
 import { toApiError } from '../lib/api';
+import { loadWithPrefetch } from '../lib/prefetch';
 import { listMessages, sendMessage } from '../services/messages';
 import { subscribeToConversation, type LiveStatus } from '../services/realtime';
 import { conversationMessagesReducer, initialMessagesState } from './conversationMessagesReducer';
@@ -14,6 +15,8 @@ export interface ConversationMessagesOptions {
   onReceipt?: (event: ReceiptUpdatedEvent) => void;
   /** Members, roles or the name changed. */
   onConversationUpdated?: () => void;
+  /** Where the newest page may already be loading (lib/prefetch.ts); used by the first load only. */
+  prefetchKey?: string;
 }
 
 /**
@@ -49,7 +52,14 @@ export function useConversationMessages(
   useEffect(() => {
     dispatch({ type: 'reset' });
     const controller = new AbortController();
-    listMessages(conversationId, { signal: controller.signal }).then(
+    const newestPage = (signal: AbortSignal) => listMessages(conversationId, { signal });
+    const prefetchKey = optionsRef.current.prefetchKey;
+    // Only the first load may use a prefetched page; "Try again" always asks the server.
+    const load =
+      attempt === 0 && prefetchKey
+        ? loadWithPrefetch(prefetchKey, controller.signal, newestPage)
+        : newestPage(controller.signal);
+    load.then(
       (page) => {
         dispatch({ type: 'loaded', page });
         optionsRef.current.onReceived?.(page.messages);
