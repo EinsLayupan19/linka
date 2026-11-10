@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { jsonResponse, mockFetch } from '../test/fetch';
 import { authMock } from '../test/supabaseMock';
 import { ApiError, apiRequest } from './api';
+import { SLOW_REQUEST_MS, slowRequests } from './serverWake';
 
 vi.mock('./supabase', async () => (await import('../test/supabaseMock')).supabaseModule);
 
@@ -78,6 +79,51 @@ describe('apiRequest', () => {
     const [, init] = fetchMock.mock.calls[0]!;
     expect(new Headers(init?.headers).get('Content-Type')).toBe('application/json');
     expect(init?.body).toBe('{"name":"Maya"}');
+  });
+});
+
+describe('apiRequest and a slow server', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('reports a request that keeps waiting (a waking server), until its answer arrives', async () => {
+    vi.useFakeTimers();
+    let answer!: (response: Response) => void;
+    mockFetch().mockReturnValue(new Promise<Response>((resolve) => (answer = resolve)));
+
+    const request = apiRequest('/api/thing', schema);
+    await vi.advanceTimersByTimeAsync(SLOW_REQUEST_MS);
+    expect(slowRequests.isSlow()).toBe(true);
+
+    answer(jsonResponse({ value: 1 }));
+    await request;
+    expect(slowRequests.isSlow()).toBe(false);
+  });
+
+  it('does not report a slow file upload (that is the connection, not a sleeping server)', async () => {
+    vi.useFakeTimers();
+    let answer!: (response: Response) => void;
+    mockFetch().mockReturnValue(new Promise<Response>((resolve) => (answer = resolve)));
+
+    const upload = apiRequest('/api/thing', schema, { method: 'PUT', file: { body: new Blob(['x']), contentType: 'image/png' } });
+    await vi.advanceTimersByTimeAsync(SLOW_REQUEST_MS * 2);
+    expect(slowRequests.isSlow()).toBe(false);
+
+    answer(jsonResponse({ value: 1 }));
+    await upload;
+  });
+
+  it('stops reporting a slow request that fails', async () => {
+    vi.useFakeTimers();
+    let fail!: (error: Error) => void;
+    mockFetch().mockReturnValue(new Promise<Response>((_, reject) => (fail = reject)));
+
+    const request = apiRequest('/api/thing', schema).catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(SLOW_REQUEST_MS);
+    expect(slowRequests.isSlow()).toBe(true);
+
+    fail(new TypeError('Failed to fetch'));
+    await request;
+    expect(slowRequests.isSlow()).toBe(false);
   });
 });
 

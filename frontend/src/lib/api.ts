@@ -1,6 +1,7 @@
 import { apiErrorResponseSchema } from '@linka/shared';
 import type { z } from 'zod';
 import { env } from './env';
+import { slowRequests } from './serverWake';
 import { getSupabase } from './supabase';
 
 /** Error codes created in the browser (the API's own codes come from @linka/shared). */
@@ -51,6 +52,17 @@ async function accessToken(): Promise<string> {
  * Aborted requests reject with the original AbortError so callers can ignore them.
  */
 export async function apiRequest<T>(path: string, schema: z.ZodType<T>, options: ApiRequestOptions = {}): Promise<T> {
+  // A request that waits too long (usually the free host waking up) is explained on screen.
+  // File uploads are left out: a slow upload is the user's connection, not a sleeping server.
+  const done = options.file ? () => undefined : slowRequests.start();
+  try {
+    return await send(path, schema, options);
+  } finally {
+    done();
+  }
+}
+
+async function send<T>(path: string, schema: z.ZodType<T>, options: ApiRequestOptions): Promise<T> {
   const { auth, json, file, ...init } = options;
   const headers = new Headers(init.headers);
   headers.set('Accept', 'application/json');

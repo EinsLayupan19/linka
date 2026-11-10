@@ -5,6 +5,7 @@ import { AppShell } from './components/layout/AppShell';
 import { AuthLayout } from './components/layout/AuthLayout';
 import { PageAnnouncer } from './components/layout/PageAnnouncer';
 import { PageLoading } from './components/layout/PageStatus';
+import { ServerWakeNotice } from './components/layout/ServerWakeNotice';
 import { SignedInLayout } from './components/layout/SignedInLayout';
 import { Chat } from './pages/Chat';
 import { Chats, ChatsHome } from './pages/Chats';
@@ -40,6 +41,7 @@ export function App() {
     <>
       <PageAnnouncer />
       <AppRoutes />
+      <ServerWakeNotice />
     </>
   );
 }
