@@ -166,9 +166,29 @@ describe('avatar URLs elsewhere', () => {
   it('fall back to no picture when signing fails', async () => {
     const maya = await user();
     await maya.putAvatar(sampleFiles.png(), 'image/png');
+    // A server that has not signed this picture yet (the upload above filled the URL cache).
+    const media = createMediaUrls(storage);
+    app = createApp({ verifyAccessToken: auth.verifyAccessToken, profiles: createProfileStore(t.db, media, storage) });
     storage.failNext('signedUrls');
     const res = await maya.get('/api/users/me');
     expect(res.status).toBe(200);
     expect(res.body.avatarUrl).toBeNull();
+  });
+
+  it('keep the same URL across responses, so browsers can cache the picture', async () => {
+    const maya = await user();
+    await maya.putAvatar(sampleFiles.png(), 'image/png');
+    const first = await maya.get('/api/users/me');
+    const second = await maya.get('/api/users/me');
+    expect(first.body.avatarUrl).toMatch(/^https:\/\/storage\.test\/sign\/avatars\//);
+    expect(second.body.avatarUrl).toBe(first.body.avatarUrl);
+  });
+
+  it('change when the picture is replaced', async () => {
+    const maya = await user();
+    const before = (await maya.putAvatar(sampleFiles.png(), 'image/png')).body.avatarUrl as string;
+    const after = (await maya.putAvatar(sampleFiles.jpeg(), 'image/jpeg')).body.avatarUrl as string;
+    expect(after).toMatch(/^https:\/\/storage\.test\/sign\/avatars\//);
+    expect(after).not.toBe(before);
   });
 });
