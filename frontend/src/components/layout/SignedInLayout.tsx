@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Outlet, useMatch } from 'react-router';
+import { Outlet } from 'react-router';
 import type { Conversation } from '@linka/shared';
 import { CallsContext, useCallManager } from '../../hooks/useCalls';
 import { ChatsContext, useConversationList } from '../../hooks/useChats';
@@ -14,11 +14,9 @@ import { CallPanel, type CallPeer } from '../call/CallPanel';
  */
 export function SignedInLayout() {
   const { profile } = useProfile();
-  const openConversation = useMatch('/conversations/:conversationId')?.params.conversationId;
-  const activeId = openConversation && openConversation !== 'new' ? openConversation : null;
 
   const calls = useCallManager(profile.id);
-  const chats = useConversationList(profile.id, activeId, { onCall: calls.handleCallUpdate, onJoined: calls.resync });
+  const chats = useConversationList(profile.id, { onCall: calls.handleCallUpdate, onJoined: calls.resync });
 
   // Who the call is with: from the list, or fetched once (a brand-new conversation may not be listed yet).
   const callConversationId = 'call' in calls.state && calls.state.call ? calls.state.call.conversationId : null;

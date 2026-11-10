@@ -45,11 +45,48 @@ const myMember = (conversation: Conversation, myUserId: string) =>
   conversation.members.find((m) => m.userId === myUserId);
 
 /**
+ * Applies read positions the server has confirmed (the "read floors") to a freshly loaded list.
+ * A list response can be older than a read saved meanwhile: it was requested before the read and
+ * arrived after it. Its counts must not bring back badges the server has already cleared.
+ *
+ * - caughtUp: conversations whose response already includes the saved read (the floor can go)
+ * - behind: a conversation also has messages after the floor; only the server can count those
+ */
+export function applyReadFloors(
+  conversations: Conversation[],
+  floors: ReadonlyMap<string, string>,
+  myUserId: string,
+): { conversations: Conversation[]; caughtUp: string[]; behind: boolean } {
+  const caughtUp: string[] = [];
+  let behind = false;
+  const result = conversations.map((conversation) => {
+    const floor = floors.get(conversation.id);
+    if (!floor) return conversation;
+    const serverRead = myMember(conversation, myUserId)?.lastReadAt ?? null;
+    if (serverRead && serverRead >= floor) {
+      caughtUp.push(conversation.id);
+      return conversation;
+    }
+    const members = conversation.members.map((m) => (m.userId === myUserId ? { ...m, lastReadAt: floor } : m));
+    const last = conversation.lastMessage;
+    if (!last || last.createdAt <= floor) return { ...conversation, members, unreadCount: 0 };
+    behind = true;
+    return { ...conversation, members };
+  });
+  return { conversations: result, caughtUp, behind };
+}
+
+/**
  * The signed-in user's conversations, kept live by ONE realtime subscription: their own
  * private user channel (`user:<id>`), whatever the number of conversations.
  *
- * Unread counts come from the server; live events only adjust them, idempotently (each message
- * id counts once), and every (re)join refetches the authoritative list.
+ * Unread counts follow the server's saved read state:
+ * - every message from someone else counts, in every conversation, including the open one (the
+ *   list only hides the open conversation's badge on screen; see ConversationList)
+ * - a count only drops for a read the server confirmed: a saved PUT /read, or the
+ *   conversation.read event the database sends after saving one
+ * - live events adjust counts idempotently (each message id counts once), and every (re)join
+ *   refetches the authoritative list; read floors keep an older response from undoing a saved read
  */
 /** Other things the user channel carries, for whoever needs them (calls). */
 export interface UserChannelListeners {
@@ -58,11 +95,7 @@ export interface UserChannelListeners {
   onJoined?: () => void;
 }
 
-export function useConversationList(
-  myUserId: string,
-  activeConversationId: string | null,
-  listeners: UserChannelListeners = {},
-): ChatsContextValue {
+export function useConversationList(myUserId: string, listeners: UserChannelListeners = {}): ChatsContextValue {
   const listenersRef = useRef(listeners);
   useEffect(() => {
     listenersRef.current = listeners;
@@ -75,10 +108,14 @@ export function useConversationList(
 
   /** Message ids already counted into each conversation's unread count since the last fetch. */
   const counted = useRef(new Map<string, Set<string>>());
-  const active = useRef(activeConversationId);
-  useEffect(() => {
-    active.current = activeConversationId;
-  }, [activeConversationId]);
+  /**
+   * Per conversation, the newest read position the server confirmed in this session. Kept until a
+   * list response shows the server has caught up, or the user is no longer a member (a new
+   * membership starts from nothing). Never tied to which conversation is open.
+   */
+  const readFloors = useRef(new Map<string, string>());
+  /** Set while the refetch asked for by a "behind" list response is under way (at most one). */
+  const refetchedForReadFloor = useRef(false);
 
   const refresh = useCallback(() => setAttempt((n) => n + 1), []);
 
@@ -109,8 +146,7 @@ export function useConversationList(
           countUnread &&
           message.senderId !== myUserId &&
           !seen.has(message.id) &&
-          (myLastRead === null || message.createdAt > myLastRead) &&
-          active.current !== conversation.id;
+          (myLastRead === null || message.createdAt > myLastRead);
         if (isUnread) {
           seen.add(message.id);
           counted.current.set(conversation.id, seen);
@@ -145,8 +181,18 @@ export function useConversationList(
         : listConversations(controller.signal);
     load.then(
       (conversations) => {
+        const reconciled = applyReadFloors(conversations, readFloors.current, myUserId);
+        for (const id of reconciled.caughtUp) readFloors.current.delete(id);
         counted.current.clear();
-        setList({ status: 'ready', conversations });
+        setList({ status: 'ready', conversations: reconciled.conversations });
+        // An older response that also has messages after a saved read: ask once more for the
+        // server's current count. A second "behind" answer in a row does not ask again (no loop).
+        if (reconciled.behind && !refetchedForReadFloor.current) {
+          refetchedForReadFloor.current = true;
+          refresh();
+        } else {
+          refetchedForReadFloor.current = false;
+        }
         // Preview and order only: the server's unread counts are authoritative and may already
         // include these messages.
         const pending = [...early.current.values()];
@@ -164,10 +210,13 @@ export function useConversationList(
       },
     );
     return () => controller.abort();
-  }, [attempt, delivery, myUserId, showMessage]);
+  }, [attempt, delivery, myUserId, showMessage, refresh]);
 
+  /** Only ever called with a read the server confirmed (a saved PUT /read or its database event). */
   const applyRead = useCallback(
     (conversationId: string, lastReadAt: string) => {
+      const floor = readFloors.current.get(conversationId);
+      if (!floor || floor < lastReadAt) readFloors.current.set(conversationId, lastReadAt);
       let needsRefresh = false;
       setList((current) => {
         if (current.status !== 'ready') return current;
@@ -202,6 +251,8 @@ export function useConversationList(
 
   const removeConversation = useCallback((conversationId: string) => {
     counted.current.delete(conversationId);
+    // No longer a member: if added back later, that membership starts with nothing read.
+    readFloors.current.delete(conversationId);
     setList((current) =>
       current.status === 'ready'
         ? { status: 'ready', conversations: current.conversations.filter((c) => c.id !== conversationId) }

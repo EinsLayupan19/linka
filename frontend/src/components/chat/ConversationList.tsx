@@ -26,7 +26,6 @@ function preview(conversation: Conversation, myUserId: string): string {
 function ConversationRow({ conversation, myUserId }: { conversation: Conversation; myUserId: string }) {
   const title = conversationTitle(conversation, myUserId);
   const last = conversation.lastMessage;
-  const unread = conversation.unreadCount;
   return (
     <li>
       <NavLink
@@ -36,31 +35,58 @@ function ConversationRow({ conversation, myUserId }: { conversation: Conversatio
           (isActive ? 'bg-surface ring-1 ring-line' : 'hover:bg-surface')
         }
       >
-        <ConversationAvatar conversation={conversation} myUserId={myUserId} />
-        <span className="min-w-0 flex-1">
-          {conversation.type === 'group' && <span className="sr-only">Group: </span>}
-          <span className="flex items-baseline justify-between gap-2">
-            <span className={`truncate ${unread > 0 ? 'font-semibold' : 'font-medium'}`}>{title}</span>
-            {last && (
-              <time dateTime={last.createdAt} className="shrink-0 text-xs text-ink-muted">
-                {formatListTimestamp(last.createdAt)}
-              </time>
-            )}
-          </span>
-          <span className="flex items-center justify-between gap-2">
-            <span className={`block truncate text-sm ${unread > 0 ? 'text-ink' : 'text-ink-muted'}`}>
-              {preview(conversation, myUserId)}
-            </span>
-            {unread > 0 && (
-              <span className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-accent px-1.5 text-xs font-semibold text-on-accent">
-                <span aria-hidden="true">{unreadBadge(unread)}</span>
-                <span className="sr-only">{unread > 99 ? 'More than 99' : unread} unread</span>
-              </span>
-            )}
-          </span>
-        </span>
+        {({ isActive }) => {
+          // The open conversation is being looked at: no badge on screen. Its count is kept (it
+          // drops when the server saves the read), so leaving before that shows the true number.
+          const unread = isActive ? 0 : conversation.unreadCount;
+          return (
+            <ConversationRowContent conversation={conversation} myUserId={myUserId} title={title} last={last} unread={unread} />
+          );
+        }}
       </NavLink>
     </li>
+  );
+}
+
+function ConversationRowContent({
+  conversation,
+  myUserId,
+  title,
+  last,
+  unread,
+}: {
+  conversation: Conversation;
+  myUserId: string;
+  title: string;
+  last: Conversation['lastMessage'];
+  unread: number;
+}) {
+  return (
+    <>
+      <ConversationAvatar conversation={conversation} myUserId={myUserId} />
+      <span className="min-w-0 flex-1">
+        {conversation.type === 'group' && <span className="sr-only">Group: </span>}
+        <span className="flex items-baseline justify-between gap-2">
+          <span className={`truncate ${unread > 0 ? 'font-semibold' : 'font-medium'}`}>{title}</span>
+          {last && (
+            <time dateTime={last.createdAt} className="shrink-0 text-xs text-ink-muted">
+              {formatListTimestamp(last.createdAt)}
+            </time>
+          )}
+        </span>
+        <span className="flex items-center justify-between gap-2">
+          <span className={`block truncate text-sm ${unread > 0 ? 'text-ink' : 'text-ink-muted'}`}>
+            {preview(conversation, myUserId)}
+          </span>
+          {unread > 0 && (
+            <span className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-accent px-1.5 text-xs font-semibold text-on-accent">
+              <span aria-hidden="true">{unreadBadge(unread)}</span>
+              <span className="sr-only">{unread > 99 ? 'More than 99' : unread} unread</span>
+            </span>
+          )}
+        </span>
+      </span>
+    </>
   );
 }
 
