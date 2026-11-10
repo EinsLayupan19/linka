@@ -109,6 +109,20 @@ describe('starting an upload', () => {
     expect(retry.body.upload).not.toBeNull();
   });
 
+  it('refuses a clientId already used for an upload in another conversation', async () => {
+    const [maya, jonas, ana] = await Promise.all([user(), user(), user()]);
+    const withJonas = await direct(maya, jonas);
+    const withAna = await direct(maya, ana);
+    const file = png();
+    await maya.post(`/api/conversations/${withJonas}/attachments`, file);
+
+    const reused = await maya.post(`/api/conversations/${withAna}/attachments`, file);
+
+    expect(reused.status).toBe(409);
+    expect(reused.body.error.message).toBe('This client id was already used for another upload.');
+    expect(reused.body.attachment).toBeUndefined();
+  });
+
   it('requires authentication and membership', async () => {
     const [maya, jonas, outsider] = await Promise.all([user(), user(), user()]);
     const conversationId = await direct(maya, jonas);

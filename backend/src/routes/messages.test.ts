@@ -159,6 +159,22 @@ describe('POST /api/conversations/:id/messages', () => {
     expect(rows).toEqual([{ n: 1 }]);
   });
 
+  it('refuses a clientId already used in another conversation, without revealing that message', async () => {
+    const [maya, jonas, ana] = await Promise.all([user(), user(), user()]);
+    const withJonas = await directConversation(maya, jonas);
+    const withAna = await directConversation(maya, ana);
+    const clientId = randomUUID();
+    await send(maya, withJonas, 'For Jonas only', clientId);
+
+    const reused = await send(maya, withAna, 'For Ana', clientId);
+
+    expect(reused.status).toBe(409);
+    expect(reused.body.error.message).toBe('This client id was already used for another message.');
+    expect(JSON.stringify(reused.body)).not.toContain('For Jonas only');
+    const { rows } = await t.client.query('select count(*)::int as n from messages where conversation_id = $1', [withAna]);
+    expect(rows).toEqual([{ n: 0 }]);
+  });
+
   it('handles the same retry arriving twice at once', async () => {
     const [maya, jonas] = await Promise.all([user(), user()]);
     const conversationId = await directConversation(maya, jonas);
