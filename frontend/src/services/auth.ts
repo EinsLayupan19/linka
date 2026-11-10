@@ -18,6 +18,12 @@ const MESSAGES: Record<string, string> = {
   invalid_credentials: 'Email or password is incorrect.',
   email_not_confirmed: 'Confirm your email address first. Check your inbox for the link.',
   user_already_exists: 'An account with this email already exists. Try logging in instead.',
+  email_exists: 'An account with this email already exists. Try logging in instead.',
+  email_address_invalid: 'This email address cannot be used. Check it or use another one.',
+  // Supabase's built-in email only reaches the project's team; everyone else needs custom SMTP.
+  email_address_not_authorized: 'We cannot send email to this address right now, so sign-up could not finish. Please try again later.',
+  signup_disabled: 'New sign-ups are turned off at the moment.',
+  validation_failed: 'Check your email address and password, then try again.',
   weak_password: 'Choose a stronger password.',
   same_password: 'Choose a password different from your current one.',
   over_email_send_rate_limit: 'Too many emails were sent. Wait a few minutes and try again.',
@@ -36,6 +42,29 @@ function toAuthError(error: SupabaseAuthError): AuthError {
   return new AuthError('Something went wrong. Please try again.', error.code);
 }
 
+/**
+ * Supabase's answer when the database rejects a new account (for example a trigger on auth.users
+ * failing). The whole insert is rolled back, so no account exists afterwards and trying again is safe.
+ */
+const isSignUpDatabaseError = (error: SupabaseAuthError) =>
+  error.code === 'unexpected_failure' && /database error saving new user/i.test(error.message);
+
+/** Sign-up has one failure of its own; everything else is handled like other auth errors. */
+function toSignUpError(error: SupabaseAuthError): AuthError {
+  if (isSignUpDatabaseError(error)) {
+    // For whoever runs the site: the Postgres and Auth logs in Supabase name the real cause.
+    console.error('Sign-up rejected by the database (see the Supabase Auth and Postgres logs):', error.status, error.code);
+    return new AuthError(
+      'We could not create your account because of a problem on our side. No account was created. Please try again later.',
+      'signup_database_error',
+    );
+  }
+  if (error.code === 'email_address_not_authorized') {
+    console.error('Sign-up email refused by Supabase: configure custom SMTP to email people outside the project team.');
+  }
+  return toAuthError(error);
+}
+
 /** Where email links (confirmation, password reset) send the user back to. */
 const redirectUrl = (path: string) => `${window.location.origin}${path}`;
 
@@ -49,7 +78,7 @@ export async function signUp(input: Pick<RegisterInput, 'email' | 'password'>): 
     password: input.password,
     options: { emailRedirectTo: redirectUrl('/') },
   });
-  if (error) throw toAuthError(error);
+  if (error) throw toSignUpError(error);
   return { needsEmailConfirmation: !data.session };
 }
 

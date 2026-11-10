@@ -98,6 +98,30 @@ describe('Register', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Choose a stronger password.');
   });
+
+  it('never reports success when the account could not be created, and lets the user try again', async () => {
+    const failure = new AuthError(
+      'We could not create your account because of a problem on our side. No account was created. Please try again later.',
+      'signup_database_error',
+    );
+    vi.mocked(authService.signUp).mockRejectedValueOnce(failure).mockResolvedValueOnce({ needsEmailConfirmation: true });
+    renderWithAuth(<Register />, { auth: signedOut });
+
+    type('Email', 'maya@example.test');
+    type('Password', 'correct horse');
+    type('Confirm password', 'correct horse');
+    submit('Create account');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('No account was created.');
+    expect(screen.queryByRole('heading', { name: 'Check your email' })).not.toBeInTheDocument();
+    // The form keeps what was typed and is ready for another attempt.
+    expect(screen.getByLabelText('Email')).toHaveValue('maya@example.test');
+    expect(screen.getByRole('button', { name: 'Create account' })).toBeEnabled();
+
+    submit('Create account');
+    expect(await screen.findByRole('heading', { name: 'Check your email' })).toBeInTheDocument();
+    expect(authService.signUp).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('ForgotPassword', () => {

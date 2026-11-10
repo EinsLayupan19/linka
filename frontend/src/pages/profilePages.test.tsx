@@ -92,6 +92,83 @@ describe('Onboarding', () => {
 
     expect(await screen.findByRole('heading', { name: 'Profile page' })).toBeInTheDocument();
   });
+
+  it('keeps the form after a network failure, and a second try creates the profile', async () => {
+    let attempts = 0;
+    const api = mockApi((call) => {
+      if (call.method === 'GET' && call.path === '/api/users/me') return notFound();
+      if (call.method === 'POST' && call.path === '/api/users/me') {
+        attempts += 1;
+        return attempts === 1 ? Promise.reject(new TypeError('Failed to fetch')) : jsonResponse(testProfile(), 201);
+      }
+      return undefined;
+    });
+    renderOnboarding();
+
+    await screen.findByLabelText('Username');
+    type('Username', 'maya');
+    type('Display name', 'Maya Reyes');
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not reach the server/);
+    expect(screen.getByLabelText('Username')).toHaveValue('maya');
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'Profile page' })).toBeInTheDocument();
+    expect(api.callsTo('POST', '/api/users/me')).toHaveLength(2);
+  });
+
+  it('treats "profile already exists" on a retry as done (the first answer was lost)', async () => {
+    mockApi((call) => {
+      if (call.method === 'GET' && call.path === '/api/users/me') return notFound();
+      if (call.method === 'POST' && call.path === '/api/users/me') {
+        return jsonResponse({ error: { code: 'PROFILE_EXISTS', message: 'Your profile is already set up.' } }, 409);
+      }
+      return undefined;
+    });
+    renderOnboarding();
+
+    await screen.findByLabelText('Username');
+    type('Username', 'maya');
+    type('Display name', 'Maya Reyes');
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    expect(await screen.findByRole('heading', { name: 'Profile page' })).toBeInTheDocument();
+  });
+
+  it('shows a server failure without pretending the profile was created', async () => {
+    mockApi((call) => {
+      if (call.method === 'GET' && call.path === '/api/users/me') return notFound();
+      if (call.method === 'POST' && call.path === '/api/users/me') {
+        return jsonResponse({ error: { code: 'INTERNAL_ERROR', message: 'Something went wrong' } }, 500);
+      }
+      return undefined;
+    });
+    renderOnboarding();
+
+    await screen.findByLabelText('Username');
+    type('Username', 'maya');
+    type('Display name', 'Maya Reyes');
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Something went wrong');
+    expect(screen.queryByRole('heading', { name: 'Profile page' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/onboarding');
+  });
+});
+
+describe('signing in after registration', () => {
+  it('sends a confirmed user who has no profile yet to onboarding', async () => {
+    mockApi((call) => {
+      if (call.method === 'GET' && call.path === '/api/users/me') return notFound();
+      if (call.method === 'GET' && call.path === '/api/conversations') return jsonResponse({ conversations: [] });
+      return undefined;
+    });
+    renderProfile();
+
+    await waitFor(() => expect(screen.getByTestId('current-path')).toHaveTextContent('/onboarding'));
+  });
 });
 
 /**

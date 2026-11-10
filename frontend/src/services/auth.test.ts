@@ -37,6 +37,63 @@ describe('signUp', () => {
       'Choose a stronger password.',
     );
   });
+
+  // Supabase answers 500 "Database error saving new user" when something in the database (such
+  // as a trigger on auth.users) rejects the new account. The insert is rolled back: no account.
+  it('explains a database failure during sign-up, and that no account was created', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    authMock.signUp.mockResolvedValue(
+      failed(new AuthApiError('Database error saving new user', 500, 'unexpected_failure')),
+    );
+
+    const error = await signUp({ email: 'maya@example.test', password: 'correct horse' }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AuthError);
+    expect((error as AuthError).message).toBe(
+      'We could not create your account because of a problem on our side. No account was created. Please try again later.',
+    );
+    expect((error as AuthError).code).toBe('signup_database_error');
+    // Logged for whoever runs the site, without the person's email address.
+    expect(consoleError).toHaveBeenCalled();
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain('maya@example.test');
+  });
+
+  it('keeps other unexpected sign-up failures generic', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    authMock.signUp.mockResolvedValue(failed(new AuthApiError('internal: something odd', 500, 'unexpected_failure')));
+
+    await expect(signUp({ email: 'maya@example.test', password: 'correct horse' })).rejects.toThrow(
+      'Something went wrong. Please try again.',
+    );
+  });
+
+  it('explains when confirmation emails cannot be sent to the address', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    authMock.signUp.mockResolvedValue(
+      failed(new AuthApiError('Email address "x" cannot be used as it is not authorized', 400, 'email_address_not_authorized')),
+    );
+
+    await expect(signUp({ email: 'maya@example.test', password: 'correct horse' })).rejects.toThrow(
+      'We cannot send email to this address right now, so sign-up could not finish. Please try again later.',
+    );
+  });
+
+  it.each([
+    ['email_exists', 'An account with this email already exists. Try logging in instead.'],
+    ['user_already_exists', 'An account with this email already exists. Try logging in instead.'],
+    ['email_address_invalid', 'This email address cannot be used. Check it or use another one.'],
+    ['signup_disabled', 'New sign-ups are turned off at the moment.'],
+    ['validation_failed', 'Check your email address and password, then try again.'],
+    ['over_email_send_rate_limit', 'Too many emails were sent. Wait a few minutes and try again.'],
+  ])('maps the "%s" sign-up error to a clear message', async (code, message) => {
+    authMock.signUp.mockResolvedValue(failed(new AuthApiError('raw message', 400, code)));
+
+    await expect(signUp({ email: 'maya@example.test', password: 'correct horse' })).rejects.toThrow(message);
+  });
+
+  it('reports a network failure during sign-up as a connection problem', async () => {
+    authMock.signUp.mockResolvedValue(failed(new AuthRetryableFetchError('Failed to fetch', 0)));
+    await expect(signUp({ email: 'maya@example.test', password: 'correct horse' })).rejects.toThrow(/Could not reach/);
+  });
 });
 
 describe('signIn', () => {
