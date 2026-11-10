@@ -4,6 +4,7 @@ import {
   ErrorCode,
   fileExtension,
   UNATTACHED_UPLOAD_TTL_HOURS,
+  UPLOAD_DAILY_BYTES_LIMIT,
   type Attachment,
   type AttachmentUpload,
   type AttachmentUploadResponse,
@@ -44,6 +45,13 @@ export interface AttachmentStore {
 }
 
 const notFound = () => new AppError(404, ErrorCode.AttachmentNotFound, 'Attachment not found.');
+
+const quotaExceeded = () =>
+  new AppError(
+    429,
+    ErrorCode.UploadQuotaExceeded,
+    `You have reached the daily upload limit of ${UPLOAD_DAILY_BYTES_LIMIT / (1024 * 1024)} MB. Try again later.`,
+  );
 
 function toUpload(row: MessageAttachmentRow): AttachmentUpload {
   return {
@@ -108,20 +116,34 @@ export function createAttachmentStore(db: Database, storage: StorageGateway | nu
       const storagePath = `${conversationId}/${userId}/${id}.${fileExtension(input.fileName)}`;
       let row: MessageAttachmentRow | undefined;
       try {
-        [row] = await db
-          .insert(messageAttachments)
-          .values({
-            id,
-            conversationId,
-            uploaderId: userId,
-            clientId: input.clientId,
-            status: 'pending',
-            storagePath,
-            fileName: input.fileName,
-            contentType: input.contentType,
-            sizeBytes: input.sizeBytes,
-          })
-          .returning();
+        row = await db.transaction(async (tx) => {
+          // One upload start at a time per user (a lock held until this transaction ends), so two
+          // starts at the same moment cannot both fit under the daily limit.
+          await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`linka:upload-quota:${userId}`}, 0))`);
+          // Everything this user started in the last 24 hours and has not cancelled: pending,
+          // uploaded and sent. Uses the (uploader_id, client_id) index.
+          const [used] = await tx
+            .select({ bytes: sql<string>`coalesce(sum(${messageAttachments.sizeBytes}), 0)` })
+            .from(messageAttachments)
+            .where(and(eq(messageAttachments.uploaderId, userId), sql`${messageAttachments.createdAt} > now() - interval '24 hours'`));
+          if (Number(used?.bytes ?? 0) + input.sizeBytes > UPLOAD_DAILY_BYTES_LIMIT) throw quotaExceeded();
+
+          const [inserted] = await tx
+            .insert(messageAttachments)
+            .values({
+              id,
+              conversationId,
+              uploaderId: userId,
+              clientId: input.clientId,
+              status: 'pending',
+              storagePath,
+              fileName: input.fileName,
+              contentType: input.contentType,
+              sizeBytes: input.sizeBytes,
+            })
+            .returning();
+          return inserted;
+        });
       } catch (error) {
         // The same retry raced the first attempt.
         if (postgresErrorCode(error) === UNIQUE_VIOLATION) {

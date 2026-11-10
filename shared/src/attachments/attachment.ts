@@ -9,6 +9,11 @@ export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
 export const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
+/**
+ * Attachments one user may upload in any 24 hours (declared sizes, checked when an upload starts),
+ * so one account cannot fill the project's storage. Cancelled uploads stop counting.
+ */
+export const UPLOAD_DAILY_BYTES_LIMIT = 50 * 1024 * 1024;
 export const ATTACHMENT_URLS_MAX = 50;
 /** Unattached uploads older than this are removed by the server's cleanup sweep. */
 export const UNATTACHED_UPLOAD_TTL_HOURS = 24;

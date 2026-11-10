@@ -48,6 +48,8 @@ export const ErrorCode = {
   UploadRejected: 'UPLOAD_REJECTED',
   /** The attachment is already part of a message. */
   AttachmentInUse: 'ATTACHMENT_IN_USE',
+  /** The user's uploads in the last 24 hours would exceed UPLOAD_DAILY_BYTES_LIMIT (429). */
+  UploadQuotaExceeded: 'UPLOAD_QUOTA_EXCEEDED',
   UnsupportedMediaType: 'UNSUPPORTED_MEDIA_TYPE',
   PayloadTooLarge: 'PAYLOAD_TOO_LARGE',
   /** Too many requests in a short time (429); the Retry-After header says when to try again. */
