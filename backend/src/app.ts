@@ -75,7 +75,9 @@ export function createApp(overrides: Partial<AppDependencies> = {}): Express {
   app.set('trust proxy', env.TRUST_PROXY);
   app.use(helmet());
   app.use(cors({ origin: (origin, callback) => callback(null, origin && env.CORS_ORIGIN.includes(origin) ? origin : false) }));
-  app.use(express.json({ limit: '100kb' }));
+  // inflate: false refuses compressed bodies (415) instead of decompressing them. Linka's clients
+  // never compress requests, and decompression is where GHSA-27r3-jxmh-p828 (a DoS) lived.
+  app.use(express.json({ limit: '100kb', inflate: false }));
 
   app.use('/api/health', limits.health, healthRouter(deps.checkDatabase));
   app.use('/api/users', usersRouter({ ...deps, limits }));

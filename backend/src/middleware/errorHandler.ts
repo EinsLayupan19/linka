@@ -25,6 +25,21 @@ function toPublicError(error: unknown): { statusCode: number; body: ApiErrorResp
     };
   }
 
+  // A compressed body (the API never decompresses, see app.ts) or an unknown character set:
+  // the client's request, not a server failure.
+  if (isBodyParserError(error) && error.type === 'encoding.unsupported') {
+    return {
+      statusCode: 415,
+      body: { error: { code: ErrorCode.UnsupportedMediaType, message: 'Compressed request bodies are not accepted.' } },
+    };
+  }
+  if (isBodyParserError(error) && error.type === 'charset.unsupported') {
+    return {
+      statusCode: 415,
+      body: { error: { code: ErrorCode.UnsupportedMediaType, message: 'Unsupported character set.' } },
+    };
+  }
+
   return { statusCode: 500, body: { error: { code: ErrorCode.Internal, message: 'Something went wrong' } } };
 }
 

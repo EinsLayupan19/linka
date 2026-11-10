@@ -57,11 +57,11 @@ export function usersRouter(deps: {
 
   // Profile picture: the image itself is the body (small, so it passes through the API, which
   // checks type, size and real content before storing it privately). The body is parsed only
-  // here, capped at the avatar limit.
+  // here, capped at the avatar limit, and never decompressed (see app.ts).
   router.put(
     '/me/avatar',
     deps.limits.uploads,
-    express.raw({ type: () => true, limit: MAX_AVATAR_BYTES }),
+    express.raw({ type: () => true, limit: MAX_AVATAR_BYTES, inflate: false }),
     async (req, res) => {
       const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
       const contentType = (req.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
