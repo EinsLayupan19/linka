@@ -93,14 +93,18 @@ export function createMessageStore(db: Database): MessageStore {
 
       // Newest first, one extra row to learn whether an older page exists.
       // Row-value comparison keeps ties on created_at stable, and both parts walk the
-      // (conversation_id, created_at, id) index backwards.
+      // (conversation_id, created_at, id) index backwards. The cursor's time goes as an ISO string
+      // with a cast, never as a Date: the production driver cannot send a Date inside sql``
+      // (see db/postgresJsDates.test.ts).
       const rows = await db
         .select()
         .from(messages)
         .where(
           and(
             eq(messages.conversationId, conversationId),
-            cursor ? sql`(${messages.createdAt}, ${messages.id}) < (${cursor.createdAt}, ${cursor.id})` : undefined,
+            cursor
+              ? sql`(${messages.createdAt}, ${messages.id}) < (${cursor.createdAt.toISOString()}::timestamptz, ${cursor.id}::uuid)`
+              : undefined,
           ),
         )
         .orderBy(desc(messages.createdAt), desc(messages.id))

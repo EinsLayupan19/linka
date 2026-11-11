@@ -64,12 +64,15 @@ export function createMarkerStore(db: Database): MarkerStore {
       };
 
       // Only a forward move writes (an equal marker is a no-op, not a write).
+      // Inside sql``, a time goes as an ISO string with a cast, never as a Date: the production
+      // driver cannot send a Date there (see db/postgresJsDates.test.ts).
+      const atParam = sql`${at.toISOString()}::timestamptz`;
       const [updated] = await db
         .update(conversationMembers)
         .set({
           lastReadAt: at,
           // Read implies delivered: delivery catches up, but never moves back.
-          lastDeliveredAt: sql`greatest(coalesce(${conversationMembers.lastDeliveredAt}, ${at}), ${at})`,
+          lastDeliveredAt: sql`greatest(coalesce(${conversationMembers.lastDeliveredAt}, ${atParam}), ${atParam})`,
         })
         .where(and(ownRow(userId, conversationId), or(isNull(conversationMembers.lastReadAt), lt(conversationMembers.lastReadAt, at))))
         .returning(returning);
@@ -108,7 +111,8 @@ export function createMarkerStore(db: Database): MarkerStore {
       // so a marker never moves backwards and unchanged markers cost no write.
       const targetFor = (column: SQL | typeof conversationMembers.conversationId): SQL =>
         sql`case ${column} ${sql.join(
-          ids.map((id) => sql`when ${id}::uuid then ${latest.get(id)!}::timestamptz`),
+          // An ISO string, not a Date: see markRead.
+          ids.map((id) => sql`when ${id}::uuid then ${latest.get(id)!.toISOString()}::timestamptz`),
           sql` `,
         )} end`;
 

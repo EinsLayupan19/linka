@@ -77,6 +77,41 @@ const SUPABASE_STUB = `
 
 const migrationsFolder = fileURLToPath(new URL('../db/migrations', import.meta.url));
 
+type Fn = (...args: unknown[]) => unknown;
+
+/**
+ * Makes the PGlite client refuse JavaScript Dates as query parameters, like the production
+ * driver does (drizzle-orm/postgres-js fails before sending them; see db/postgresJsDates.test.ts).
+ * PGlite would accept them, so without this a Date written inside a raw sql`` template passes
+ * every test and fails only in production. Values drizzle maps for a column arrive as ISO strings
+ * and are unaffected. Covers statements run on the client and inside transactions.
+ */
+function rejectDateParams<T extends object>(target: T): T {
+  return new Proxy(target, {
+    get(object, property, receiver) {
+      const value = Reflect.get(object, property, receiver) as unknown;
+      if (typeof value !== 'function') return value;
+      if (property === 'transaction') {
+        return (run: (tx: object) => unknown, ...rest: unknown[]) =>
+          (value as Fn).apply(object, [(tx: object) => run(rejectDateParams(tx)), ...rest]);
+      }
+      if (property === 'query') {
+        return (query: string, params?: unknown[], ...rest: unknown[]) => {
+          const isDate = (param: unknown): boolean => param instanceof Date || (Array.isArray(param) && param.some(isDate));
+          if (params?.some(isDate)) {
+            throw new TypeError(
+              'The "string" argument must be of type string or an instance of Buffer or ArrayBuffer. Received an instance of Date ' +
+                '(the production driver cannot send a JavaScript Date written inside sql``: pass date.toISOString() with a ::timestamptz cast)',
+            );
+          }
+          return (value as Fn).apply(object, [query, params, ...rest]);
+        };
+      }
+      return (value as Fn).bind(object);
+    },
+  });
+}
+
 export interface TestDatabase {
   /** Drizzle connected as the database owner (like the API, it bypasses RLS). */
   db: Database;
@@ -113,7 +148,8 @@ export async function createTestDatabase(): Promise<TestDatabase> {
   const client = new PGlite();
   await client.exec(SUPABASE_STUB);
 
-  const db = drizzle(client, { schema });
+  // The app's queries go through the guard; this file's own helpers use the client directly.
+  const db = drizzle(rejectDateParams(client), { schema });
   await migrate(db, { migrationsFolder });
 
   async function createAuthUser(email = `${randomUUID()}@example.test`) {
