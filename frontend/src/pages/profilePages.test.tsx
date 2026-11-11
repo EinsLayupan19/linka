@@ -246,7 +246,8 @@ describe('Profile: sessions', () => {
     expect(within(sessions).getByText(/every device where you use Linka, including this one/)).toBeInTheDocument();
     fireEvent.click(within(sessions).getByRole('button', { name: 'Log out of all devices' }));
 
-    await waitFor(() => expect(authMock.signOut).toHaveBeenCalledWith({ scope: 'global' }));
+    await waitFor(() => expect(authMock.signOut).toHaveBeenCalledTimes(2));
+    expect(authMock.signOut.mock.calls).toEqual([[{ scope: 'others' }], [{ scope: 'local' }]]);
   });
 
   it('keeps the ordinary log out for this device only', async () => {
@@ -265,7 +266,17 @@ describe('Profile: sessions', () => {
     const sessions = await screen.findByRole('region', { name: 'Sessions' });
     fireEvent.click(within(sessions).getByRole('button', { name: 'Log out of all devices' }));
 
-    expect(await within(sessions).findByRole('alert')).toHaveTextContent(/Could not reach the authentication service/);
+    const alert = await within(sessions).findByRole('alert');
+    expect(alert).toHaveTextContent(/other devices are still signed in, and so is this one/);
+    expect(alert).toHaveTextContent(/Could not reach the authentication service/);
+    // Nothing was revoked, so this device keeps its session: no local sign-out was attempted.
+    expect(authMock.signOut.mock.calls).toEqual([[{ scope: 'others' }]]);
     expect(within(sessions).getByRole('button', { name: 'Log out of all devices' })).toBeEnabled();
+
+    fireEvent.click(within(sessions).getByRole('button', { name: 'Log out of all devices' }));
+
+    await waitFor(() => expect(authMock.signOut).toHaveBeenCalledTimes(3));
+    expect(authMock.signOut.mock.calls).toEqual([[{ scope: 'others' }], [{ scope: 'others' }], [{ scope: 'local' }]]);
+    await waitFor(() => expect(within(sessions).queryByRole('alert')).not.toBeInTheDocument());
   });
 });

@@ -143,9 +143,71 @@ describe('signOut / password reset', () => {
     expect(authMock.signOut).toHaveBeenCalledWith({ scope: 'local' });
   });
 
-  it('can sign out of every device, this one included', async () => {
+  /**
+   * Behaves like the installed supabase-js (see supabaseSignOut.test.ts): scopes 'global' and
+   * 'local' drop this device's session even when the request fails; 'others' never does.
+   * `fails` lists the scopes whose next request fails (offline).
+   */
+  function emulateSupabaseSignOut(fails: string[] = []) {
+    const state = { signedInHere: true, scopes: [] as string[] };
+    authMock.signOut.mockImplementation((async ({ scope }: { scope: string }) => {
+      state.scopes.push(scope);
+      const failing = fails.indexOf(scope);
+      const error = failing >= 0 ? new AuthRetryableFetchError('Failed to fetch', 0) : null;
+      if (failing >= 0) fails.splice(failing, 1);
+      if (scope !== 'others') state.signedInHere = false;
+      return { error };
+    }) as never);
+    return state;
+  }
+
+  it('signs out everywhere by revoking the other devices first, then this one', async () => {
+    const supabase = emulateSupabaseSignOut();
+
     await signOut({ everywhere: true });
-    expect(authMock.signOut).toHaveBeenCalledWith({ scope: 'global' });
+
+    expect(supabase.scopes).toEqual(['others', 'local']);
+    expect(supabase.signedInHere).toBe(false);
+  });
+
+  it('never uses scope global, which signs this device out even when nothing was revoked', async () => {
+    const supabase = emulateSupabaseSignOut(['others']);
+
+    await signOut({ everywhere: true }).catch(() => undefined);
+
+    expect(supabase.scopes).not.toContain('global');
+  });
+
+  it('keeps this device signed in, and says the other devices are still signed in, when revoking them fails', async () => {
+    const supabase = emulateSupabaseSignOut(['others']);
+
+    const error = await signOut({ everywhere: true }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AuthError);
+    expect((error as AuthError).message).toBe(
+      'Your other devices are still signed in, and so is this one. Could not reach the authentication service. Check your connection and try again.',
+    );
+    expect(supabase.scopes).toEqual(['others']);
+    expect(supabase.signedInHere).toBe(true);
+  });
+
+  it('can be retried after a failure', async () => {
+    const supabase = emulateSupabaseSignOut(['others']);
+    await signOut({ everywhere: true }).catch(() => undefined);
+
+    await signOut({ everywhere: true });
+
+    expect(supabase.scopes).toEqual(['others', 'others', 'local']);
+    expect(supabase.signedInHere).toBe(false);
+  });
+
+  it('an ordinary log out only signs out this device', async () => {
+    const supabase = emulateSupabaseSignOut();
+
+    await signOut();
+
+    expect(supabase.scopes).toEqual(['local']);
+    expect(supabase.signedInHere).toBe(false);
   });
 
   it('can sign out of every other device, keeping this one', async () => {

@@ -88,14 +88,30 @@ export async function signIn(input: LoginInput): Promise<void> {
 }
 
 /**
- * Signs out on this device and revokes this session's refresh token. With `everywhere`, revokes
- * every session of the account (all devices, this one included).
+ * Signs out on this device and revokes this session's refresh token. With `everywhere`, first
+ * revokes every other session of the account, then signs out here.
+ *
+ * `everywhere` deliberately avoids scope 'global': supabase-js drops this device's session even
+ * when the global request fails, which would show the login page as if every device had been
+ * signed out while the others are still signed in. Scope 'others' never touches this device's
+ * session, so on failure the user stays signed in here, sees why, and can try again.
  *
  * Revoking stops sessions from being renewed; an access token already issued keeps working until
  * it expires (Supabase's access-token lifetime, 1 hour by default).
  */
 export async function signOut(options: { everywhere?: boolean } = {}): Promise<void> {
-  const { error } = await getSupabase().auth.signOut({ scope: options.everywhere ? 'global' : 'local' });
+  if (options.everywhere) {
+    try {
+      await signOutOtherDevices();
+    } catch (error) {
+      const reason = error instanceof AuthError ? error.message : 'Something went wrong. Please try again.';
+      throw new AuthError(
+        `Your other devices are still signed in, and so is this one. ${reason}`,
+        error instanceof AuthError ? error.code : undefined,
+      );
+    }
+  }
+  const { error } = await getSupabase().auth.signOut({ scope: 'local' });
   if (error) throw toAuthError(error);
 }
 
